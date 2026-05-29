@@ -482,6 +482,28 @@ Built here first, lifted later once a second consumer materialises:
 
 ---
 
+## Deviations (surface at REVIEW gate)
+
+The brief is otherwise locked; the entries below record where reality
+forced a change and must be ratified (or reverted) at the next REVIEW.
+
+- **`grafana = =0.1.3` pulls `reqwest = 0.13`, not `0.12`.** The crate
+  hard-requires `reqwest 0.13.1` (and `rust-version = 1.92`), contrary
+  to the "same stack we're already on" / "single `reqwest` version in
+  `cargo tree`" assumptions in *Dependency policy*. With the Grafana
+  scraper wired, `cargo tree -e normal` shows BOTH `reqwest 0.12`
+  (workspace/visual path) and `reqwest 0.13` (transitive via `grafana`).
+  The duplication is contained: the `grafana` crate — and therefore its
+  `reqwest 0.13` — is reachable only through `client.rs` behind the
+  `GrafanaClient` trait, so the documented "swap for hand-rolled
+  `reqwest 0.12` is a one-file change" escape hatch still holds. REVIEW
+  must choose: (a) accept the dual `reqwest` version while `grafana
+  0.1.3` is the API client, or (b) drop the crate and hand-roll
+  `client.rs` on `reqwest 0.12`. Until then the M1 single-version
+  invariant is relaxed to exclude `reqwest`.
+
+---
+
 ## Milestones
 
 1. **M1 — Skeleton & contract.** Workspace, `ncrawler-spi` with

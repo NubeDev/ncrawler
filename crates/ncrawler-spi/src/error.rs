@@ -18,6 +18,10 @@ pub enum ScrapeError {
     /// A URL was rejected by the SSRF allow-list (SCOPE: security).
     #[error("host blocked by SSRF allow-list: {0}")]
     SsrfBlocked(String),
+    /// The requested scrape mode is not implemented yet (e.g. the
+    /// Grafana `Visual` / `Both` paths land in a later milestone).
+    #[error("scrape mode unsupported: {0}")]
+    ModeUnsupported(String),
     #[error("scrape cancelled")]
     Cancelled,
     #[error("{0}")]

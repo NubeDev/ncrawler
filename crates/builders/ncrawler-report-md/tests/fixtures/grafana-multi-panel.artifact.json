@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source": "grafana",
+  "target": "abc",
+  "fetched_at": "2026-05-29T14:22:01Z",
+  "items": [
+    {
+      "id": "panel-2",
+      "kind": "panel",
+      "title": "CPU",
+      "text": "CPU",
+      "data": { "series": 1 },
+      "tags": ["cpu", "prod"]
+    },
+    {
+      "id": "panel-5",
+      "kind": "panel",
+      "title": "Mem",
+      "text": "Mem",
+      "data": { "series": 2 },
+      "tags": []
+    }
+  ],
+  "assets": [
+    {
+      "path": "assets/panel-2.png",
+      "mime": "image/png",
+      "label": "screenshot",
+      "item_id": "panel-2"
+    },
+    {
+      "path": "assets/panel-5.png",
+      "mime": "image/png",
+      "label": "screenshot",
+      "item_id": "panel-5"
+    },
+    {
+      "path": "assets/raw-dashboard.json",
+      "mime": "application/json",
+      "label": "raw",
+      "item_id": null
+    }
+  ],
+  "meta": { "dashboard": { "uid": "abc" } }
+}

@@ -1,6 +1,6 @@
 [package]
 name        = "ncrawler-report-md"
-description = "ncrawler — deterministic Markdown report builder. Placeholder."
+description = "ncrawler — deterministic Markdown report builder."
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -11,3 +11,12 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+ncrawler-spi = { workspace = true }
+starter-spi  = { workspace = true }
+
+serde_json  = { workspace = true }
+async-trait = { workspace = true }
+chrono      = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

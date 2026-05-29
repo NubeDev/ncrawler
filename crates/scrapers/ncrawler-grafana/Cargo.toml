@@ -1,6 +1,6 @@
 [package]
 name        = "ncrawler-grafana"
-description = "ncrawler — Grafana scraper (API + renderer-plugin visuals). Placeholder."
+description = "ncrawler — Grafana scraper (API + renderer-plugin visuals)."
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -11,3 +11,29 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+ncrawler-spi = { workspace = true }
+starter-spi  = { workspace = true }
+
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+chrono      = { workspace = true }
+async-trait = { workspace = true }
+tracing     = { workspace = true }
+url         = "2"
+http        = "1"
+
+# Grafana HTTP API client. Pinned EXACTLY per SCOPE: single maintainer,
+# v0.1.x churn risk. The dependency is reached ONLY through the
+# `GrafanaClient` trait in `client.rs`, so swapping it for hand-rolled
+# `reqwest` later is a one-file change.
+#
+# DEVIATION (surface at REVIEW gate): grafana 0.1.3 hard-requires
+# `reqwest = 0.13.1` and `rust-version = 1.92`, NOT the reqwest 0.12 the
+# rest of the workspace pins. `cargo tree` therefore shows reqwest 0.12
+# AND 0.13. SCOPE's "single reqwest version" invariant cannot hold while
+# this crate is wired (see SCOPE.md "Deviations").
+grafana = { version = "=0.1.3", default-features = false, features = ["async", "rustls"] }
+
+[dev-dependencies]
+tokio    = { workspace = true }
+wiremock = "0.6"
