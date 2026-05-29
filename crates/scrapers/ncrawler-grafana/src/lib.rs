@@ -24,9 +24,13 @@ pub mod instance;
 pub mod interp;
 pub mod merge;
 pub mod resolve;
+pub mod selector;
 pub mod visual;
 
 pub use client::{resolve_token, GrafanaClient, GrafanaCrateClient, RendererClient};
+pub use selector::{
+    parse_inventory, DashboardEntry, DashboardSelector, Resolution, SelectorError, MAX_LIMIT,
+};
 pub use visual::VisualOpts;
 
 /// The Grafana [`Scraper`]. Resolves the bearer token from the optional

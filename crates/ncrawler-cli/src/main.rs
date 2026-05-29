@@ -121,10 +121,21 @@ fn grafana_job(
     rest: &[String],
     allow_hosts: Vec<String>,
 ) -> Result<ncrawler_spi::ScrapeJob> {
+    use ncrawler_grafana::DashboardSelector;
     use ncrawler_spi::ScrapeJob;
     let url = flag_value(rest, "--url").context("grafana scrape needs --url")?;
-    let uid = flag_value(rest, "--uid").context("grafana scrape needs --uid")?;
     let mode = flag_value(rest, "--mode").unwrap_or_else(|| "both".to_owned());
+
+    // The shared selector (REPORT §2) replaces the bare `--uid`: a single
+    // `--uid x` is now just the singleton case of `--uid a,b,c` / `--all`
+    // / `--name` / `--folder` / `--tag`. The live `/api/search` fan-out
+    // lands in the next stage; until then the scraper handles exactly one
+    // explicit uid, so resolve that case here and surface the rest with a
+    // clear message instead of silently scraping the wrong thing.
+    let selector =
+        DashboardSelector::from_args(rest).context("parsing the grafana dashboard selector")?;
+    let target = single_uid_target(&selector)?;
+
     let mut options = serde_json::Map::new();
     options.insert("url".into(), url.into());
     options.insert("mode".into(), mode.into());
@@ -148,10 +159,32 @@ fn grafana_job(
     }
     Ok(ScrapeJob {
         source: "grafana".into(),
-        target: uid,
+        target,
         allow_hosts,
         options: serde_json::Value::Object(options),
     })
+}
+
+/// Reduce a parsed [`DashboardSelector`] to the single dashboard uid the
+/// current single-target scraper can handle. A lone `--uid x` resolves to
+/// `x`; `--all` / `--name` / `--folder` / `--tag` / a multi-uid list all
+/// need the live `/api/search` fan-out that lands in the next stage, so we
+/// reject them with an actionable message rather than scraping the wrong
+/// dashboard.
+fn single_uid_target(selector: &ncrawler_grafana::DashboardSelector) -> Result<String> {
+    let only_uids = !selector.all
+        && selector.name.is_none()
+        && selector.folder.is_none()
+        && selector.tag.is_none()
+        && selector.limit.is_none();
+    match selector.uids.as_slice() {
+        [uid] if only_uids => Ok(uid.clone()),
+        _ => anyhow::bail!(
+            "multi-dashboard grafana scrape (--all / --name / --folder / --tag, \
+             or a multi-uid --uid list) needs the live /api/search fan-out that \
+             lands in the next stage; for now pin exactly one `--uid <uid>`"
+        ),
+    }
 }
 
 /// Build a spider [`ScrapeJob`] from the trailing flags.
