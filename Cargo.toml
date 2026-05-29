@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/ncrawler-spi",
     "crates/ncrawler-core",
+    "crates/ncrawler-redact",
     "crates/ncrawler-cli",
     "crates/scrapers/ncrawler-grafana",
     "crates/scrapers/ncrawler-spider",
@@ -28,6 +29,7 @@ rust-version = "1.80"
 # Internal crates.
 ncrawler-spi       = { path = "crates/ncrawler-spi",  version = "0.1.0" }
 ncrawler-core      = { path = "crates/ncrawler-core", version = "0.1.0" }
+ncrawler-redact    = { path = "crates/ncrawler-redact", version = "0.1.0" }
 ncrawler-report-md = { path = "crates/builders/ncrawler-report-md", version = "0.1.0" }
 
 # Sibling `starter` workspace, consumed as a path dependency for
@@ -60,6 +62,12 @@ tokio       = { version = "1", features = ["rt-multi-thread", "macros", "sync", 
 reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 clap        = { version = "4", features = ["derive", "env"] }
 url         = "2"
+# Pattern-based secret masking for the shared redaction pass
+# (ncrawler-redact). `regex` is already in the tree transitively at
+# 1.12.x; quickcheck powers the redactor's property-test harness.
+regex             = "1"
+quickcheck        = "1"
+quickcheck_macros = "1"
 
 # Crawling: HTTP-only. `default-features = false` drops the `chrome` and
 # `smart` features so `spider_chrome` never enters the tree (SCOPE: one

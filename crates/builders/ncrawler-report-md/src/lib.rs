@@ -8,14 +8,30 @@
 //! Asset ↔ Item linkage). The output is byte-stable for a given
 //! artifact so it can be diffed in PRs and fed to the AI builder.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 
+use ncrawler_redact::Redactor;
 use ncrawler_spi::{Artifact, Asset, BuildCtx, BuildError, BuildOutput, Builder, Cancel, Item};
 
 /// Filename written into the artifact directory.
 pub const REPORT_FILENAME: &str = "report.md";
+
+/// `ctx.options` key controlling the secret-redaction pass. Absent or
+/// `true` ⇒ redact (default-on, SCOPE/REPORT §7); `false` ⇒ explicit
+/// bypass (the CLI's `--no-redact`).
+pub const REDACT_OPTION: &str = "redact";
+
+/// Apply the shared secret redactor to already-rendered Markdown.
+///
+/// This is the builder-side pass mandated by REPORT §7: the artifact on
+/// disk stays raw (0700 perms are the on-disk defence); masking happens
+/// only when a renderer emits a report. Zero-copy when nothing matches.
+pub fn redact_markdown(markdown: &str) -> Cow<'_, str> {
+    Redactor::new().redact(markdown)
+}
 
 /// The deterministic Markdown [`Builder`].
 #[derive(Default)]
@@ -44,9 +60,22 @@ impl Builder for MarkdownBuilder {
             return Err(BuildError::Cancelled);
         }
         let markdown = render(artifact);
+        // Builder-side redaction (default-on). `--no-redact` sets the
+        // option to `false` and is a true bypass — the raw render is
+        // written verbatim, never double-masked.
+        let redact = ctx
+            .options
+            .get(REDACT_OPTION)
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let emitted = if redact {
+            redact_markdown(&markdown)
+        } else {
+            Cow::Borrowed(markdown.as_str())
+        };
         let rel = PathBuf::from(REPORT_FILENAME);
         let abs = ctx.artifact_dir.join(&rel);
-        std::fs::write(&abs, markdown).map_err(|e| BuildError::Io(e.to_string()))?;
+        std::fs::write(&abs, emitted.as_ref()).map_err(|e| BuildError::Io(e.to_string()))?;
         Ok(BuildOutput {
             files: vec![rel],
             summary: format!(

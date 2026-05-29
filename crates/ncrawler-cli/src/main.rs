@@ -70,6 +70,20 @@ fn flag_present(rest: &[String], flag: &str) -> bool {
     rest.iter().any(|a| a == flag)
 }
 
+/// Resolve the redaction toggle for a build. Default-on; `--no-redact`
+/// opts out explicitly and logs a WARN (REPORT §7). `--redact` is the
+/// explicit form of the default. `--no-redact` wins if both are given.
+fn resolve_redact(rest: &[String]) -> bool {
+    if flag_present(rest, "--no-redact") {
+        tracing::warn!(
+            "--no-redact: secret redaction DISABLED; the report may contain \
+             tokens, host UUIDs, and credential literals in cleartext"
+        );
+        return false;
+    }
+    true
+}
+
 /// Scrape a source into a fresh on-disk artifact. Grafana visual/both
 /// modes pre-write panel PNGs into the artifact's `assets/` dir
 /// (computed from `--out`); the store then writes `artifact.json` into
@@ -310,6 +324,10 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
     if let Some(m) = flag_value(rest, "--model") {
         options.insert("model".into(), serde_json::Value::String(m));
     }
+    // Secret redaction is on by default (REPORT §7). `--no-redact` is an
+    // explicit, logged opt-out; `--redact` is accepted for symmetry.
+    let redact = resolve_redact(rest);
+    options.insert("redact".into(), serde_json::Value::Bool(redact));
     let ctx = BuildCtx {
         artifact_dir: artifact_dir.clone(),
         options: serde_json::Value::Object(options),
