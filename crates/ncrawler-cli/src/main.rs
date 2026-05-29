@@ -315,9 +315,22 @@ fn spider_job(rest: &[String], allow_hosts: Vec<String>) -> Result<ncrawler_spi:
 /// `report-ai` streams a Claude run, wiring Ctrl-C through
 /// `starter_spi::ai::Cancel` (via `TokenCancel`) so a long run is
 /// cancellable mid-stream (SCOPE: cancellation).
-async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[String]) -> Result<()> {
+async fn run_build(
+    builder: &str,
+    artifact_dir: Option<std::path::PathBuf>,
+    rest: &[String],
+) -> Result<()> {
     use ncrawler_spi::{BuildCtx, Builder};
 
+    // `report-grafana` renders over the whole on-disk store (the
+    // `_instance` sidecar + the selected per-dashboard artifacts), not a
+    // single artifact dir, so it has its own entry point (REPORT §6b).
+    if builder == "report-grafana" {
+        return run_report_grafana(rest).await;
+    }
+
+    let artifact_dir = artifact_dir
+        .context("this builder needs an <artifact-dir> (e.g. ./artifacts/grafana/<uid>/latest)")?;
     let artifact = read_artifact(&artifact_dir)
         .with_context(|| format!("reading artifact at {}", artifact_dir.display()))?;
     let mut options = serde_json::Map::new();
@@ -330,6 +343,7 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
     options.insert("redact".into(), serde_json::Value::Bool(redact));
     let ctx = BuildCtx {
         artifact_dir: artifact_dir.clone(),
+        dashboard_dirs: Vec::new(),
         options: serde_json::Value::Object(options),
     };
 
@@ -374,7 +388,8 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
         }
         other => {
             anyhow::bail!(
-                "build: unknown builder `{other}` (expected report-md | report-ai | vector)"
+                "build: unknown builder `{other}` \
+                 (expected report-md | report-grafana | report-ai | vector)"
             )
         }
     }
@@ -385,6 +400,122 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
         println!("  wrote {}", f.display());
     }
     Ok(())
+}
+
+/// `ncrawler build report-grafana [--store <dir>] [--mode overview|full]
+/// [--data] [--window ...] [--redact|--no-redact] [--host <h>]
+/// [--all|--uid|--name|--folder|--tag|--limit ...]`.
+///
+/// Renders over the on-disk store: resolves the shared
+/// [`DashboardSelector`] (stage 2) against what was actually scraped for
+/// the instance, then writes `REPORT.md` next to the `_instance/<host>`
+/// sidecar's `latest` (REPORT §6b).
+async fn run_report_grafana(rest: &[String]) -> Result<()> {
+    use ncrawler_grafana::{parse_inventory, DashboardSelector};
+    use ncrawler_report_grafana::{build_report, Mode, ReportOptions};
+
+    let store_dir = flag_value(rest, "--store").unwrap_or_else(|| "./artifacts".to_owned());
+    let store = ArtifactStore::new(&store_dir);
+
+    let host = resolve_instance_host(&store, rest)?;
+    let sidecar = store
+        .read_instance_sidecar("grafana", &host)?
+        .with_context(|| format!("no _instance sidecar for host `{host}` under {store_dir}"))?;
+
+    // The full instance inventory the sidecar recorded at scrape time.
+    let inventory = parse_inventory(&sidecar.search);
+    // What is actually on disk: inventory entries with a per-dashboard
+    // `latest` artifact present (report-time `--all` is on-disk-only).
+    let on_disk: Vec<_> = inventory
+        .iter()
+        .filter(|e| store.latest_link("grafana", &e.uid).exists())
+        .cloned()
+        .collect();
+
+    let selector =
+        DashboardSelector::from_args(rest).context("parsing the grafana dashboard selector")?;
+    let resolution = selector.resolve_on_disk(&on_disk, inventory.len());
+
+    let dashboard_dirs: Vec<std::path::PathBuf> = resolution
+        .uids()
+        .iter()
+        .map(|uid| store.latest_link("grafana", uid))
+        .collect();
+    let sidecar_dir = store.instance_latest_link("grafana", &host);
+
+    let opts = ReportOptions {
+        mode: Mode::parse(&flag_value(rest, "--mode").unwrap_or_else(|| "overview".to_owned())),
+        data: flag_present(rest, "--data"),
+        window: flag_value(rest, "--window")
+            .unwrap_or_else(|| ncrawler_report_grafana::DEFAULT_WINDOW.to_owned()),
+        redact: resolve_redact(rest),
+    };
+
+    let cancel = starter_ai::TokenCancel::new();
+    let output = build_report(
+        &sidecar_dir,
+        &dashboard_dirs,
+        &selector_scope(&selector),
+        inventory.len(),
+        on_disk.len(),
+        &opts,
+        &cancel,
+    )
+    .map_err(|e| anyhow::anyhow!("report-grafana build failed: {e}"))?;
+
+    println!("{}", output.summary);
+    for f in &output.files {
+        println!("  wrote {}", sidecar_dir.join(f).display());
+    }
+    Ok(())
+}
+
+/// Pick the Grafana instance to report on. `--host` is explicit; otherwise
+/// use the sole scraped host, or error listing the choices when ambiguous.
+fn resolve_instance_host(store: &ArtifactStore, rest: &[String]) -> Result<String> {
+    if let Some(h) = flag_value(rest, "--host") {
+        return Ok(h);
+    }
+    let hosts = store.list_instance_hosts("grafana")?;
+    match hosts.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => anyhow::bail!(
+            "no grafana _instance sidecar found; run `ncrawler scrape grafana --mode api …` first"
+        ),
+        many => anyhow::bail!(
+            "multiple scraped grafana hosts ({}); disambiguate with --host <host>",
+            many.join(", ")
+        ),
+    }
+}
+
+/// A one-line scope description for the report header (REPORT §4), echoing
+/// the selector flags the operator passed.
+fn selector_scope(sel: &ncrawler_grafana::DashboardSelector) -> String {
+    let mut parts = Vec::new();
+    if sel.all {
+        parts.push("--all".to_owned());
+    }
+    if !sel.uids.is_empty() {
+        parts.push(format!("--uid {}", sel.uids.join(",")));
+    }
+    if let Some(n) = &sel.name {
+        parts.push(format!("--name {n}"));
+    }
+    if let Some(f) = &sel.folder {
+        parts.push(format!("--folder {f}"));
+    }
+    if let Some(t) = &sel.tag {
+        parts.push(format!("--tag {t}"));
+    }
+    if let Some(l) = sel.limit {
+        parts.push(format!("--limit {l}"));
+    }
+    if parts.is_empty() {
+        "(no selection)".to_owned()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn run_ls(source: Option<String>, since: Option<String>, out: std::path::PathBuf) -> Result<()> {

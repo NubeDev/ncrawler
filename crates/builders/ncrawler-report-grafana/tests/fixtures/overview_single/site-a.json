@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "source": "grafana",
+  "target": "site-a",
+  "fetched_at": "2026-05-29T06:00:00Z",
+  "items": [
+    { "id": "panel-2", "kind": "panel", "title": "Electrical - MTD Usage", "text": "", "data": null, "tags": [] },
+    { "id": "panel-5", "kind": "panel", "title": "Water - MTD Usage", "text": "", "data": null, "tags": [] }
+  ],
+  "assets": [],
+  "meta": {
+    "dashboard": {
+      "meta": { "folderTitle": "Sites" },
+      "dashboard": {
+        "uid": "site-a",
+        "title": "Site Summary — Warehouse A",
+        "tags": ["site", "prod"],
+        "templating": {
+          "list": [
+            { "name": "buildingRef", "current": { "value": "WH-A" } },
+            { "name": "hostUUID", "current": { "value": "550e8400-e29b-41d4-a716-446655440000" } }
+          ]
+        },
+        "panels": [
+          { "id": 1, "title": "Overview", "type": "row" },
+          {
+            "id": 2, "title": "Electrical - MTD Usage", "type": "timeseries",
+            "datasource": { "type": "postgres", "uid": "pg1" },
+            "targets": [ { "refId": "A", "rawSql": "SELECT sum(kwh) FROM usage WHERE building='$buildingRef'" } ]
+          },
+          {
+            "id": 5, "title": "Water - MTD Usage", "type": "timeseries",
+            "datasource": { "type": "grafana-rubix-os-data-source", "uid": "rbx1" },
+            "targets": [ { "refId": "A", "rawSql": "SELECT sum(litres) FROM water WHERE host='$hostUUID'" } ]
+          },
+          { "id": 7, "title": "Notes", "type": "text", "targets": [] }
+        ]
+      }
+    },
+    "annotations": []
+  }
+}

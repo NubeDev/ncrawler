@@ -27,12 +27,38 @@ pub struct ScrapeJob {
 
 /// Context handed to a [`Builder`]: where the artifact lives on disk and
 /// any builder-specific options.
+///
+/// `schema_version` note: `dashboard_dirs` was added so a multi-artifact
+/// renderer (`report-grafana`) can consume the `_instance/<host>/latest`
+/// sidecar (named by `artifact_dir`) **plus** a list of per-dashboard
+/// artifact directories in one build. Single-artifact builders leave it
+/// empty; the field is additive and does not change the on-disk
+/// [`Artifact`] schema, so `ARTIFACT_SCHEMA_VERSION` is unchanged.
 #[derive(Debug, Clone)]
 pub struct BuildCtx {
-    /// Absolute path to the artifact directory the build writes into.
+    /// Absolute path to the directory the build writes into. For
+    /// single-artifact builders this is the artifact dir; for
+    /// `report-grafana` it is the `_instance/<host>/latest` sidecar dir
+    /// (where `REPORT.md` is written next to `instance.json`).
     pub artifact_dir: PathBuf,
+    /// Additional per-dashboard artifact directories a multi-artifact
+    /// builder renders over (REPORT §6b). Empty for single-artifact
+    /// builders.
+    pub dashboard_dirs: Vec<PathBuf>,
     /// Builder-specific knobs (skill id, model, store URL, …).
     pub options: serde_json::Value,
+}
+
+impl BuildCtx {
+    /// Construct a single-artifact build context (no extra dashboard
+    /// dirs). Convenience for the common case.
+    pub fn new(artifact_dir: impl Into<PathBuf>, options: serde_json::Value) -> Self {
+        Self {
+            artifact_dir: artifact_dir.into(),
+            dashboard_dirs: Vec::new(),
+            options,
+        }
+    }
 }
 
 /// Produces an [`Artifact`] from a source.

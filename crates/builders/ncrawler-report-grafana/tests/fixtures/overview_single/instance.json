@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "host": "rd-esr.nube-iiot.com",
+  "fetched_at": "2026-05-29T06:00:00Z",
+  "search": [
+    { "uid": "site-a", "title": "Site Summary — Warehouse A", "folderTitle": "Sites", "tags": ["site", "prod"] },
+    { "uid": "site-b", "title": "Site Summary — Warehouse B", "folderTitle": "Sites", "tags": ["site"] },
+    { "uid": "nav", "title": "0. Navigation", "tags": [] }
+  ],
+  "datasources": [
+    { "name": "PostgreSQL", "type": "postgres", "uid": "pg1", "isDefault": true },
+    { "name": "Rubix OS", "type": "grafana-rubix-os-data-source", "uid": "rbx1", "isDefault": false }
+  ],
+  "instance": { "version": "7.5.17", "edition": "OSS", "rendererAvailable": false },
+  "folders": [ { "title": "Sites" }, { "title": "Energy" } ]
+}

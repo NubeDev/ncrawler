@@ -77,6 +77,7 @@ async fn build_writes_report_file() {
     std::fs::create_dir_all(&dir).unwrap();
     let ctx = BuildCtx {
         artifact_dir: dir.clone(),
+        dashboard_dirs: Vec::new(),
         options: serde_json::Value::Null,
     };
     let out = MarkdownBuilder::new()
@@ -116,6 +117,7 @@ async fn build_to_string(artifact: &Artifact, options: serde_json::Value) -> Str
     std::fs::create_dir_all(&dir).unwrap();
     let ctx = BuildCtx {
         artifact_dir: dir.clone(),
+        dashboard_dirs: Vec::new(),
         options,
     };
     MarkdownBuilder::new()

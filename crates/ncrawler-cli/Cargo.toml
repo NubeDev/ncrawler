@@ -24,6 +24,7 @@ store-qdrant = ["ncrawler-vector/store-qdrant"]
 ncrawler-spi       = { workspace = true }
 ncrawler-core      = { workspace = true }
 ncrawler-report-md = { workspace = true }
+ncrawler-report-grafana = { workspace = true }
 ncrawler-report-ai = { path = "../builders/ncrawler-report-ai", version = "0.1.0" }
 ncrawler-vector    = { path = "../builders/ncrawler-vector", version = "0.1.0" }
 ncrawler-grafana   = { path = "../scrapers/ncrawler-grafana", version = "0.1.0" }

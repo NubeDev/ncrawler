@@ -198,6 +198,7 @@ async fn pipeline_streams_persists_and_redacts() {
     let builder = AiReportBuilder::new(runner.clone(), resolver);
     let ctx = BuildCtx {
         artifact_dir: dir.path().to_path_buf(),
+        dashboard_dirs: Vec::new(),
         options: serde_json::Value::Null,
     };
     let cancel = TokenCancel::new();
@@ -248,6 +249,7 @@ async fn missing_skill_is_an_error() {
     let builder = AiReportBuilder::new(runner, Arc::new(NoneResolver));
     let ctx = BuildCtx {
         artifact_dir: dir.path().to_path_buf(),
+        dashboard_dirs: Vec::new(),
         options: serde_json::Value::Null,
     };
     let err = builder
@@ -269,6 +271,7 @@ async fn cancellation_short_circuits_before_run() {
     let builder = AiReportBuilder::new(runner, resolver);
     let ctx = BuildCtx {
         artifact_dir: dir.path().to_path_buf(),
+        dashboard_dirs: Vec::new(),
         options: serde_json::Value::Null,
     };
     let cancel = TokenCancel::new();
@@ -302,6 +305,7 @@ async fn live_end_to_end_claude() {
         .expect("with_defaults");
     let ctx = BuildCtx {
         artifact_dir: dir.path().to_path_buf(),
+        dashboard_dirs: Vec::new(),
         options: serde_json::Value::Null,
     };
     let cancel = TokenCancel::new();

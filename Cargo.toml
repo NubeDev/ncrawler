@@ -8,6 +8,7 @@ members = [
     "crates/scrapers/ncrawler-grafana",
     "crates/scrapers/ncrawler-spider",
     "crates/builders/ncrawler-report-md",
+    "crates/builders/ncrawler-report-grafana",
     "crates/builders/ncrawler-report-ai",
     "crates/builders/ncrawler-vector",
 ]
@@ -31,6 +32,7 @@ ncrawler-spi       = { path = "crates/ncrawler-spi",  version = "0.1.0" }
 ncrawler-core      = { path = "crates/ncrawler-core", version = "0.1.0" }
 ncrawler-redact    = { path = "crates/ncrawler-redact", version = "0.1.0" }
 ncrawler-report-md = { path = "crates/builders/ncrawler-report-md", version = "0.1.0" }
+ncrawler-report-grafana = { path = "crates/builders/ncrawler-report-grafana", version = "0.1.0" }
 
 # Sibling `starter` workspace, consumed as a path dependency for
 # cross-cutting concerns (SCOPE: AI runners, skills, secrets). Absolute

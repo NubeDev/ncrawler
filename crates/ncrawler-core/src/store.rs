@@ -153,6 +153,31 @@ impl ArtifactStore {
         self.instance_host_dir(source, host).join(LATEST)
     }
 
+    /// List the `safe(host)` directory names that have an instance sidecar
+    /// under `<root>/<source>/_instance/`. Used by `report-grafana` to
+    /// discover which instance to render when no `--host` is given. Returns
+    /// an empty vec when nothing has been scraped yet.
+    pub fn list_instance_hosts(&self, source: &str) -> Result<Vec<String>, StoreError> {
+        let base = self.root.join(source).join(INSTANCE_DIR);
+        let rd = match std::fs::read_dir(&base) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut hosts = Vec::new();
+        for ent in rd {
+            let ent = ent?;
+            if !ent.file_type()?.is_dir() {
+                continue;
+            }
+            if let Some(name) = ent.file_name().to_str() {
+                hosts.push(name.to_owned());
+            }
+        }
+        hosts.sort();
+        Ok(hosts)
+    }
+
     /// Write an [`InstanceSidecar`] into a fresh timestamped directory
     /// under `<root>/<source>/_instance/<safe(host)>/` and rewrite that
     /// host's `latest` symlink. Reuses the same `0700` + symlink
