@@ -15,9 +15,15 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-ncrawler-spi  = { workspace = true }
-ncrawler-core = { workspace = true }
+ncrawler-spi       = { workspace = true }
+ncrawler-core      = { workspace = true }
+ncrawler-report-md = { workspace = true }
+ncrawler-report-ai = { path = "../builders/ncrawler-report-ai", version = "0.1.0" }
+# `TokenCancel` bridges a Ctrl-C signal into the `starter_spi::ai::Cancel`
+# the builders propagate (SCOPE: cancellation).
+starter-ai    = { workspace = true, features = ["provider-claude"] }
 clap          = { workspace = true }
+serde_json    = { workspace = true }
 anyhow        = { workspace = true }
 chrono        = { workspace = true }
 tokio         = { workspace = true }

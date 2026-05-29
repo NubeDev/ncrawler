@@ -26,14 +26,23 @@ rust-version = "1.80"
 
 [workspace.dependencies]
 # Internal crates.
-ncrawler-spi  = { path = "crates/ncrawler-spi",  version = "0.1.0" }
-ncrawler-core = { path = "crates/ncrawler-core", version = "0.1.0" }
+ncrawler-spi       = { path = "crates/ncrawler-spi",  version = "0.1.0" }
+ncrawler-core      = { path = "crates/ncrawler-core", version = "0.1.0" }
+ncrawler-report-md = { path = "crates/builders/ncrawler-report-md", version = "0.1.0" }
 
 # Sibling `starter` workspace, consumed as a path dependency for
 # cross-cutting concerns (SCOPE: AI runners, skills, secrets). Absolute
 # path so the build resolves both from the codeless worktree and from
 # the canonical checkout at /home/user/code/rust/ncrawler.
-starter-spi = { path = "/home/user/code/rust/starter/crates/starter-spi", version = "0.1.0" }
+starter-spi      = { path = "/home/user/code/rust/starter/crates/starter-spi", version = "0.1.0" }
+# `starter-ai` ships every provider behind a default-off feature; v1
+# enables ONLY `provider-claude` (SCOPE: builders/report-ai). The
+# feature is selected at the consuming crate, not here.
+starter-ai       = { path = "/home/user/code/rust/starter/crates/starter-ai", version = "0.1.0", default-features = false }
+starter-skills   = { path = "/home/user/code/rust/starter/crates/starter-skills", version = "0.1.0" }
+# Needed for the skill-selector seam types (`SlotMap`, `SkillSelection`,
+# `SkillSelector`) that `starter-skills` implements against.
+starter-flow-spi = { path = "/home/user/code/rust/starter/crates/starter-flow-spi", version = "0.1.0" }
 
 # Third-party deps. Versions pinned to match the sibling `starter`
 # workspace exactly so `cargo tree -e normal` shows a single version of
