@@ -1,0 +1,11 @@
+{
+  "source": "grafana",
+  "items": [
+    { "id": "panel-2", "kind": "panel", "title": "CPU", "has_data": true },
+    { "id": "panel-5", "kind": "panel", "title": "Mem", "has_data": true }
+  ],
+  "assets": [
+    { "mime": "image/png", "item_id": "panel-2", "path": "assets/panel-2.png" },
+    { "mime": "image/png", "item_id": "panel-5", "path": "assets/panel-5.png" }
+  ]
+}

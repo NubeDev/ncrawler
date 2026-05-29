@@ -19,6 +19,8 @@ ncrawler-spi       = { workspace = true }
 ncrawler-core      = { workspace = true }
 ncrawler-report-md = { workspace = true }
 ncrawler-report-ai = { path = "../builders/ncrawler-report-ai", version = "0.1.0" }
+ncrawler-grafana   = { path = "../scrapers/ncrawler-grafana", version = "0.1.0" }
+ncrawler-spider    = { path = "../scrapers/ncrawler-spider", version = "0.1.0" }
 # `TokenCancel` bridges a Ctrl-C signal into the `starter_spi::ai::Cancel`
 # the builders propagate (SCOPE: cancellation).
 starter-ai    = { workspace = true, features = ["provider-claude"] }

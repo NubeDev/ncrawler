@@ -46,6 +46,112 @@ pub fn resolve_token(host: &str, store: Option<&dyn SecretStore>) -> Option<Secr
     std::env::var("GRAFANA_TOKEN").ok().map(Secret::new)
 }
 
+/// The renderer-plugin HTTP client.
+///
+/// The `grafana-image-renderer` endpoint (`/render/d-solo/...`) sits
+/// OUTSIDE `/api/`, so the `grafana` crate cannot reach it. This is the
+/// hand-rolled `reqwest` client SCOPE mandates for the visual path; it
+/// is pinned to the workspace `reqwest 0.12` (the `grafana` crate's
+/// transitive `reqwest 0.13` never leaks past `client.rs`).
+pub struct RendererClient {
+    http: reqwest::Client,
+    base: String,
+    token: Option<Secret>,
+}
+
+impl RendererClient {
+    /// Build a renderer client for `base_url` (trailing slash trimmed),
+    /// carrying the bearer `token` when present.
+    pub fn new(base_url: &str, token: Option<Secret>) -> Result<Self, ScrapeError> {
+        let http = reqwest::Client::builder()
+            .build()
+            .map_err(|e| ScrapeError::Network(e.to_string()))?;
+        Ok(Self {
+            http,
+            base: base_url.trim_end_matches('/').to_owned(),
+            token,
+        })
+    }
+
+    fn bearer(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
+            // `Secret::expose` is used only to set the header; the value
+            // is never logged (SCOPE: tokens never logged).
+            Some(t) => rb.bearer_auth(t.expose()),
+            None => rb,
+        }
+    }
+
+    /// Probe whether the renderer plugin is installed by reading
+    /// `GET /api/frontend/settings` and checking `rendererAvailable`.
+    /// Returns [`ScrapeError::RendererPluginMissing`] when the plugin is
+    /// absent so callers can decide whether to fall back to Chrome.
+    pub async fn probe(&self) -> Result<(), ScrapeError> {
+        let url = format!("{}/api/frontend/settings", self.base);
+        let resp = self
+            .bearer(self.http.get(&url))
+            .send()
+            .await
+            .map_err(|e| ScrapeError::Network(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(ScrapeError::RendererPluginMissing);
+        }
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|e| ScrapeError::Other(format!("malformed frontend settings: {e}")))?;
+        if body
+            .get("rendererAvailable")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            Ok(())
+        } else {
+            Err(ScrapeError::RendererPluginMissing)
+        }
+    }
+
+    /// `GET /render/d-solo/{uid}/_?panelId=N&width=&height=&from=&to=`.
+    /// Returns the rendered PNG bytes. A non-2xx status maps to
+    /// [`ScrapeError::RendererPluginMissing`] (the render route is gone
+    /// when the plugin is uninstalled) unless it is an auth failure.
+    pub async fn render_panel(
+        &self,
+        uid: &str,
+        panel_id: i64,
+        width: u32,
+        height: u32,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<u8>, ScrapeError> {
+        let url = format!("{}/render/d-solo/{uid}/_", self.base);
+        let resp = self
+            .bearer(self.http.get(&url))
+            .query(&[
+                ("panelId", panel_id.to_string()),
+                ("width", width.to_string()),
+                ("height", height.to_string()),
+                ("from", from.to_owned()),
+                ("to", to.to_owned()),
+            ])
+            .send()
+            .await
+            .map_err(|e| ScrapeError::Network(e.to_string()))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ScrapeError::Auth(format!("renderer returned {status}")));
+        }
+        if !status.is_success() {
+            return Err(ScrapeError::RendererPluginMissing);
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| ScrapeError::Network(e.to_string()))?;
+        Ok(bytes.to_vec())
+    }
+}
+
 /// The production [`GrafanaClient`], backed by the `grafana` crate.
 pub struct GrafanaCrateClient {
     inner: Client,

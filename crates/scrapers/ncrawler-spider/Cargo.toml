@@ -1,6 +1,6 @@
 [package]
 name        = "ncrawler-spider"
-description = "ncrawler — HTTP spider scraper for arbitrary pages. Placeholder."
+description = "ncrawler — HTTP-only spider scraper with an own chromiumoxide JS layer."
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -11,3 +11,27 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+ncrawler-spi = { workspace = true }
+
+serde_json  = { workspace = true }
+chrono      = { workspace = true }
+async-trait = { workspace = true }
+tracing     = { workspace = true }
+blake3      = { workspace = true }
+url         = { workspace = true }
+tokio       = { workspace = true }
+futures     = { workspace = true }
+
+# HTTP-only crawl. `default-features = false` keeps `spider_chrome` out
+# of the tree (SCOPE: one browser stack); `cargo tree -e normal` must
+# NOT show spider_chrome.
+spider      = { workspace = true }
+dom_smoothie = { workspace = true }
+fast_html2md = { workspace = true }
+
+# Our own headless layer (SCOPE: chrome.rs, future starter-headless).
+# The ONLY CDP impl in the build.
+chromiumoxide = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

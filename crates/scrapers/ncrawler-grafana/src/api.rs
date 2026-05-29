@@ -30,7 +30,7 @@ pub async fn scrape(
         let body = query_body(panel);
         let data = client.ds_query(&body).await?;
         ds_responses.push(data.clone());
-        items.push(panel_item(panel_id, panel, data));
+        items.push(panel_item(panel_id, panel, Some(data)));
     }
 
     // SSRF guard: every absolute URL surfaced by the dashboard JSON and
@@ -54,7 +54,7 @@ pub async fn scrape(
 
 /// Extract the panel array from a `{ "dashboard": { "panels": [...] } }`
 /// response, tolerating a missing/!array field (best-effort meta).
-fn panel_list(dash: &Value) -> Vec<Value> {
+pub(crate) fn panel_list(dash: &Value) -> Vec<Value> {
     dash.get("dashboard")
         .and_then(|d| d.get("panels"))
         .and_then(Value::as_array)
@@ -74,7 +74,7 @@ fn query_body(panel: &Value) -> Value {
 }
 
 /// One `Item::Panel` with stable id `panel-{panelId}`.
-fn panel_item(panel_id: i64, panel: &Value, data: Value) -> Item {
+pub(crate) fn panel_item(panel_id: i64, panel: &Value, data: Option<Value>) -> Item {
     let title = panel
         .get("title")
         .and_then(Value::as_str)
@@ -94,7 +94,7 @@ fn panel_item(panel_id: i64, panel: &Value, data: Value) -> Item {
         kind: ItemKind::Panel,
         title: title.clone(),
         text: title.unwrap_or_else(|| format!("panel {panel_id}")),
-        data: Some(data),
+        data,
         tags,
     }
 }

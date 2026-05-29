@@ -18,11 +18,13 @@ use url::Url;
 use ncrawler_spi::{Artifact, Cancel, ScrapeError, ScrapeJob, Scraper};
 
 pub mod api;
+pub mod chrome;
 pub mod client;
 pub mod merge;
 pub mod visual;
 
-pub use client::{resolve_token, GrafanaClient, GrafanaCrateClient};
+pub use client::{resolve_token, GrafanaClient, GrafanaCrateClient, RendererClient};
+pub use visual::VisualOpts;
 
 /// The Grafana [`Scraper`]. Resolves the bearer token from the optional
 /// [`SecretStore`] (keyed `ncrawler:grafana:<host>:token`) with a
@@ -76,9 +78,70 @@ impl Scraper for GrafanaScraper {
 
         match mode {
             "api" => api::scrape(&client, &job, fetched_at).await,
-            "visual" => visual::scrape(&client, &job, fetched_at).await,
-            "both" => merge::scrape(&client, &job, fetched_at).await,
+            "visual" | "both" => {
+                let opts = visual_opts(&job, url);
+                if opts.fallback_chrome {
+                    tracing::warn!(
+                        "--visual-fallback chrome enabled: the chromiumoxide path is \
+                         best-effort and flaky (template vars, lazy panels, no \
+                         all-queries-done signal); prefer the renderer plugin"
+                    );
+                }
+                let renderer = RendererClient::new(url, token)?;
+                let assets_dir = assets_dir_for(&job, fetched_at)?;
+                if mode == "visual" {
+                    visual::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await
+                } else {
+                    merge::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await
+                }
+            }
             other => Err(ScrapeError::ModeUnsupported(other.to_owned())),
         }
     }
+}
+
+/// Parse the visual knobs out of `job.options`, defaulting per SCOPE.
+fn visual_opts(job: &ScrapeJob, dashboard_url: &str) -> VisualOpts {
+    let o = &job.options;
+    let mut v = VisualOpts {
+        dashboard_url: dashboard_url.to_owned(),
+        fallback_chrome: o.get("visual_fallback").and_then(Value::as_str) == Some("chrome"),
+        ..VisualOpts::default()
+    };
+    if let Some(w) = o.get("width").and_then(Value::as_u64) {
+        v.width = w as u32;
+    }
+    if let Some(h) = o.get("height").and_then(Value::as_u64) {
+        v.height = h as u32;
+    }
+    if let Some(f) = o.get("from").and_then(Value::as_str) {
+        v.from = f.to_owned();
+    }
+    if let Some(t) = o.get("to").and_then(Value::as_str) {
+        v.to = t.to_owned();
+    }
+    if let Some(arr) = o.get("panels").and_then(Value::as_array) {
+        v.panels = arr.iter().filter_map(Value::as_i64).collect();
+    }
+    v
+}
+
+/// Compute the artifact's `assets/` directory under the output root
+/// (`job.options["out"]`, default `./artifacts`) using the SAME dirname
+/// the [`ncrawler_core`] store derives, so a later `store.write` of the
+/// returned artifact lands the PNGs in the right place. Creates it 0700
+/// on unix via [`ncrawler_core`] semantics.
+fn assets_dir_for(
+    job: &ScrapeJob,
+    fetched_at: chrono::DateTime<chrono::Utc>,
+) -> Result<std::path::PathBuf, ScrapeError> {
+    let out = job
+        .options
+        .get("out")
+        .and_then(Value::as_str)
+        .unwrap_or("./artifacts");
+    let dirname = ncrawler_core::dir_name(fetched_at, "grafana", &job.target);
+    let assets = std::path::Path::new(out).join(dirname).join("assets");
+    std::fs::create_dir_all(&assets).map_err(|e| ScrapeError::Other(e.to_string()))?;
+    Ok(assets)
 }

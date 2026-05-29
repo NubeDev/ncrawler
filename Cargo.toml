@@ -59,3 +59,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tokio       = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal"] }
 reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 clap        = { version = "4", features = ["derive", "env"] }
+url         = "2"
+
+# Crawling: HTTP-only. `default-features = false` drops the `chrome` and
+# `smart` features so `spider_chrome` never enters the tree (SCOPE: one
+# browser stack). JS rendering is our own `chromiumoxide` layer instead.
+spider      = { version = "2", default-features = false, features = ["sync", "reqwest_rustls_tls"] }
+# Readable-text extraction (Mozilla-readability port) + HTML→Markdown.
+dom_smoothie = "0.17"
+fast_html2md = "0.0.62"
+# The single headless-browser stack. Used by ncrawler-spider's chrome.rs
+# (JS rendering) and the grafana --visual-fallback path. NEVER alongside
+# spider_chrome.
+chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
+futures     = "0.3"
