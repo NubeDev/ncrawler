@@ -20,6 +20,7 @@ use ncrawler_spi::{Artifact, Cancel, ScrapeError, ScrapeJob, Scraper};
 pub mod api;
 pub mod chrome;
 pub mod client;
+pub mod instance;
 pub mod interp;
 pub mod merge;
 pub mod resolve;
@@ -78,8 +79,8 @@ impl Scraper for GrafanaScraper {
         let client = GrafanaCrateClient::new(url, token.as_ref())?;
         let fetched_at = chrono::Utc::now();
 
-        match mode {
-            "api" => api::scrape(&client, &job, fetched_at).await,
+        let artifact = match mode {
+            "api" => api::scrape(&client, &job, fetched_at).await?,
             "visual" | "both" => {
                 let opts = visual_opts(&job, url);
                 if opts.fallback_chrome {
@@ -92,14 +93,52 @@ impl Scraper for GrafanaScraper {
                 let renderer = RendererClient::new(url, token)?;
                 let assets_dir = assets_dir_for(&job, fetched_at)?;
                 if mode == "visual" {
-                    visual::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await
+                    visual::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await?
                 } else {
-                    merge::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await
+                    merge::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await?
                 }
             }
-            other => Err(ScrapeError::ModeUnsupported(other.to_owned())),
-        }
+            other => return Err(ScrapeError::ModeUnsupported(other.to_owned())),
+        };
+
+        // Instance sidecar: written ONCE per scrape run (all API-backed
+        // modes), so per-dashboard artifacts stop duplicating the
+        // inventory (REPORT §6a). Reuses the on-disk store machinery.
+        write_instance_sidecar(&client, &job, &host, fetched_at).await?;
+
+        Ok(artifact)
     }
+}
+
+/// Fetch the instance-wide facts and persist them to the `_instance/<host>`
+/// sidecar under the artifact root (`job.options["out"]`, default
+/// `./artifacts`) via [`ncrawler_core::ArtifactStore`]. SSRF-gates the
+/// surfaced URLs before writing.
+async fn write_instance_sidecar(
+    client: &dyn GrafanaClient,
+    job: &ScrapeJob,
+    host: &str,
+    fetched_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), ScrapeError> {
+    // A URL with no parseable host should never reach a real scrape, but
+    // keep the sidecar layout well-formed if it does.
+    let sidecar_host = if host.is_empty() {
+        "unknown-host"
+    } else {
+        host
+    };
+    let sidecar = instance::fetch(client, sidecar_host, fetched_at).await;
+    instance::enforce_ssrf(&job.allow_hosts, &sidecar)?;
+
+    let out = job
+        .options
+        .get("out")
+        .and_then(Value::as_str)
+        .unwrap_or("./artifacts");
+    ncrawler_core::ArtifactStore::new(out)
+        .write_instance("grafana", &sidecar)
+        .map_err(|e| ScrapeError::Other(format!("writing instance sidecar: {e}")))?;
+    Ok(())
 }
 
 /// Parse the visual knobs out of `job.options`, defaulting per SCOPE.

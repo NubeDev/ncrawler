@@ -87,9 +87,14 @@ async fn scrape_api_success_emits_one_item_per_panel() {
     );
     assert_eq!(artifact.items[0].tags, vec!["cpu".to_owned()]);
     assert_eq!(artifact.source, "grafana");
-    // Dashboard JSON + companion endpoints land in meta.
+    // Dashboard JSON + annotations land in per-dashboard meta. The
+    // `/api/search` inventory is NOT duplicated here anymore (REPORT §6a)
+    // — it lives once in the `_instance/<host>` sidecar.
     assert_eq!(artifact.meta["dashboard"]["dashboard"]["uid"], "abc");
-    assert_eq!(artifact.meta["search"][0]["uid"], "abc");
+    assert!(
+        artifact.meta.get("search").is_none(),
+        "per-dashboard meta must not embed the search inventory"
+    );
     assert!(artifact.meta["annotations"].is_array());
 }
 

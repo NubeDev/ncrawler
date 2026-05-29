@@ -33,6 +33,17 @@ pub trait GrafanaClient: Send + Sync {
 
     /// `GET /api/annotations` — annotation list.
     async fn annotations(&self) -> Result<Value, ScrapeError>;
+
+    /// `GET /api/folders` — the folder tree (sidebar/nav) for the
+    /// instance sidecar.
+    async fn folders(&self) -> Result<Value, ScrapeError>;
+
+    /// `GET /api/health` — instance liveness + `version` (and DB status).
+    async fn health(&self) -> Result<Value, ScrapeError>;
+
+    /// `GET /api/frontend/settings` — `buildInfo` (version/edition) and
+    /// `rendererAvailable`, used to compose the sidecar's `instance` facts.
+    async fn frontend_settings(&self) -> Result<Value, ScrapeError>;
 }
 
 /// Resolve the Grafana bearer token, newest source first:
@@ -246,6 +257,30 @@ impl GrafanaClient for GrafanaCrateClient {
         self.inner
             .raw()
             .request_json::<Value, (), ()>(http::Method::GET, &["datasources"], None, None)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn folders(&self) -> Result<Value, ScrapeError> {
+        self.inner
+            .raw()
+            .request_json::<Value, (), ()>(http::Method::GET, &["folders"], None, None)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn health(&self) -> Result<Value, ScrapeError> {
+        self.inner
+            .raw()
+            .request_json::<Value, (), ()>(http::Method::GET, &["health"], None, None)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn frontend_settings(&self) -> Result<Value, ScrapeError> {
+        self.inner
+            .raw()
+            .request_json::<Value, (), ()>(http::Method::GET, &["frontend", "settings"], None, None)
             .await
             .map_err(map_err)
     }

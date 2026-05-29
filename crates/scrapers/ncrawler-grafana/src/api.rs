@@ -93,14 +93,15 @@ pub async fn scrape(
     // BEFORE returning the artifact (SCOPE: security).
     enforce_ssrf(&job.allow_hosts, &dash, &ds_responses)?;
 
-    let search = client.search().await?;
+    // Per-dashboard `meta` keeps ONLY `dashboard` + `annotations`
+    // (REPORT §6a). The `/api/search` inventory is no longer duplicated
+    // here — it lives once in the `_instance/<host>` sidecar.
     let annotations = client.annotations().await?;
 
     let mut artifact = Artifact::new("grafana", job.target.clone(), fetched_at);
     artifact.items = items;
     artifact.meta = json!({
         "dashboard": dash,
-        "search": search,
         "annotations": annotations,
     });
     Ok(artifact)
@@ -228,13 +229,26 @@ fn enforce_ssrf(
     dash: &Value,
     ds_responses: &[Value],
 ) -> Result<(), ScrapeError> {
+    let mut values: Vec<&Value> = Vec::with_capacity(1 + ds_responses.len());
+    values.push(dash);
+    values.extend(ds_responses.iter());
+    enforce_allow_hosts(allow_hosts, &values)
+}
+
+/// Reject if any URL host surfaced by `values` is outside `allow_hosts`.
+/// Shared by the per-dashboard scrape and the instance sidecar so every
+/// endpoint is gated at scrape time (SCOPE: SSRF guard). An empty list
+/// means "operator did not opt in" → allow all.
+pub(crate) fn enforce_allow_hosts(
+    allow_hosts: &[String],
+    values: &[&Value],
+) -> Result<(), ScrapeError> {
     if allow_hosts.is_empty() {
         return Ok(());
     }
     let mut hosts = Vec::new();
-    collect_hosts(dash, &mut hosts);
-    for resp in ds_responses {
-        collect_hosts(resp, &mut hosts);
+    for v in values {
+        collect_hosts(v, &mut hosts);
     }
     for host in hosts {
         if !host_allowed(&host, allow_hosts) {
