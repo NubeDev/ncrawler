@@ -210,6 +210,23 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
         }
     });
 
+    // The vector builder writes to an external store (a LanceDB directory or
+    // a Qdrant server), not into the artifact dir, so it does not go through
+    // the `spi::Builder` -> `BuildOutput` path the file-writing builders use.
+    if builder == "vector" {
+        let store = flag_value(rest, "--store")
+            .unwrap_or_else(|| ncrawler_vector::DEFAULT_STORE_URI.to_string());
+        let summary: ncrawler_vector::BuildSummary =
+            ncrawler_vector::build_vector(&artifact, &store, &cancel)
+                .await
+                .map_err(|e| anyhow::anyhow!("vector build failed: {e}"))?;
+        println!(
+            "vector build: {} items, {} chunks, dim {} -> {}",
+            summary.items, summary.chunks, summary.dim, store
+        );
+        return Ok(());
+    }
+
     let output = match builder {
         "report-md" => {
             let b = ncrawler_report_md::MarkdownBuilder::new();
@@ -223,7 +240,9 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
             b.build(&artifact, &ctx, &cancel).await
         }
         other => {
-            anyhow::bail!("build: unknown builder `{other}` (expected report-md | report-ai)")
+            anyhow::bail!(
+                "build: unknown builder `{other}` (expected report-md | report-ai | vector)"
+            )
         }
     }
     .map_err(|e| anyhow::anyhow!("build failed: {e}"))?;

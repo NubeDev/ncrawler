@@ -1,6 +1,6 @@
 [package]
 name        = "ncrawler-vector"
-description = "ncrawler — chunk + embed vector builder. Placeholder."
+description = "ncrawler — chunk + embed vector builder (fastembed + LanceDB; optional Qdrant)."
 version.workspace      = true
 edition.workspace      = true
 license.workspace      = true
@@ -10,4 +10,34 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["embed-fastembed", "store-lance"]
+# Local ONNX embeddings (fastembed-rs); no network at inference once cached.
+embed-fastembed = ["dep:fastembed"]
+# In-process, single-directory-on-disk vector store (daemon-free default).
+store-lance = ["dep:lancedb", "dep:arrow-array", "dep:arrow-schema", "dep:futures"]
+# Server-backed store; NOT default because it requires a running Qdrant.
+store-qdrant = ["dep:qdrant-client"]
+
 [dependencies]
+ncrawler-spi = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+async-trait  = { workspace = true }
+blake3       = { workspace = true }
+tokio        = { workspace = true }
+
+# Vector stack (OSS, permissive). Versions are crate-local: the sibling
+# `starter` workspace does not carry these, so there is nothing to align to.
+fastembed     = { version = "4", optional = true }
+lancedb       = { version = "0.17", optional = true }
+arrow-array   = { version = "53", optional = true }
+arrow-schema  = { version = "53", optional = true }
+futures       = { workspace = true, optional = true }
+qdrant-client = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio  = { workspace = true }
+chrono = { workspace = true }
