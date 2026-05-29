@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ncrawler-spi",
+    "crates/ncrawler-core",
+    "crates/ncrawler-cli",
+    "crates/scrapers/ncrawler-grafana",
+    "crates/scrapers/ncrawler-spider",
+    "crates/builders/ncrawler-report-md",
+    "crates/builders/ncrawler-report-ai",
+    "crates/builders/ncrawler-vector",
+]
+
+# Mirror starter's lint relaxations so clippy 1.94+ behaves identically
+# across the two workspaces (see starter/Cargo.toml).
+[workspace.lints.clippy]
+type_complexity = "allow"
+result_large_err = "allow"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NubeDev/ncrawler"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Internal crates.
+ncrawler-spi  = { path = "crates/ncrawler-spi",  version = "0.1.0" }
+ncrawler-core = { path = "crates/ncrawler-core", version = "0.1.0" }
+
+# Sibling `starter` workspace, consumed as a path dependency for
+# cross-cutting concerns (SCOPE: AI runners, skills, secrets). Absolute
+# path so the build resolves both from the codeless worktree and from
+# the canonical checkout at /home/user/code/rust/ncrawler.
+starter-spi = { path = "/home/user/code/rust/starter/crates/starter-spi", version = "0.1.0" }
+
+# Third-party deps. Versions pinned to match the sibling `starter`
+# workspace exactly so `cargo tree -e normal` shows a single version of
+# tokio / reqwest / serde / chrono / clap.
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+thiserror   = "1"
+anyhow      = "1"
+async-trait = "0.1"
+chrono      = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+blake3      = "1"
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tokio       = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal"] }
+reqwest     = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+clap        = { version = "4", features = ["derive", "env"] }

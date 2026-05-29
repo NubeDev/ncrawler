@@ -1,0 +1,21 @@
+[package]
+name        = "ncrawler-spi"
+description = "ncrawler — service provider interface: Artifact types + Scraper/Builder traits, no impl deps."
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+thiserror   = { workspace = true }
+async-trait = { workspace = true }
+chrono      = { workspace = true }
+# `Cancel` is re-exported from here so cancellation composes with the
+# existing `starter_ai::ClaudeRunner` (SCOPE: contract section).
+starter-spi = { workspace = true }
