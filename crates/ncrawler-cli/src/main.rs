@@ -402,7 +402,7 @@ async fn run_build(
     Ok(())
 }
 
-/// `ncrawler build report-grafana [--store <dir>] [--mode overview|full]
+/// `ncrawler build report-grafana [--store <dir>] [--mode overview|full|audit]
 /// [--data] [--window ...] [--redact|--no-redact] [--host <h>]
 /// [--all|--uid|--name|--folder|--tag|--limit ...]`.
 ///

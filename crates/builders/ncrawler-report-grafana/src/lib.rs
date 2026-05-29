@@ -22,6 +22,7 @@
 //! uid)`, panels by id, tags/folders lexicographically — so re-renders
 //! diff cleanly.
 
+pub mod audit;
 mod model;
 mod render;
 mod sql;
@@ -34,6 +35,7 @@ use serde_json::Value;
 use ncrawler_core::{read_artifact, InstanceSidecar};
 use ncrawler_spi::{Artifact, BuildCtx, BuildError, BuildOutput, Builder, Cancel};
 
+pub use audit::{run_audit, Finding, Severity};
 pub use model::RenderModel;
 pub use render::render;
 
@@ -53,6 +55,9 @@ pub const DEFAULT_WINDOW: &str = "now-6h";
 pub enum Mode {
     Overview,
     Full,
+    /// Offline audit (REPORT §5): findings over the frozen artifacts; no
+    /// live HTTP.
+    Audit,
 }
 
 impl Mode {
@@ -61,6 +66,7 @@ impl Mode {
     pub fn parse(s: &str) -> Mode {
         match s {
             "full" => Mode::Full,
+            "audit" => Mode::Audit,
             _ => Mode::Overview,
         }
     }
@@ -210,7 +216,16 @@ pub fn build_report(
         inventory_total,
         on_disk_total,
     );
-    let markdown = render::render(&model, opts);
+    let markdown = if matches!(opts.mode, Mode::Audit) {
+        // Audit reads the frozen artifacts straight off disk — no live
+        // HTTP (REPORT §5). The datasource list comes from the sidecar.
+        let datasources = sql::DsEntry::parse_list(&sidecar.datasources);
+        let sources = audit::pair_sources(dashboard_dirs, &dashboards);
+        let findings = run_audit(&datasources, &sources);
+        render::render_audit(&model, &findings, opts)
+    } else {
+        render::render(&model, opts)
+    };
 
     let rel = PathBuf::from(REPORT_FILENAME);
     let abs = sidecar_dir.join(&rel);

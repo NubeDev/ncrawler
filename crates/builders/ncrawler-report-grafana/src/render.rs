@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 
 use ncrawler_redact::Redactor;
 
+use crate::audit::Finding;
 use crate::model::{DashboardView, PanelView, RenderModel};
 use crate::{Mode, ReportOptions};
 
@@ -24,6 +25,87 @@ pub fn render(model: &RenderModel, opts: &ReportOptions) -> String {
     out
 }
 
+/// Render audit mode (REPORT §5): the metadata header + instance facts
+/// (the only §3 sections audit keeps), then a findings table grouped by
+/// severity with deterministic ordering. Messages are redacted under the
+/// default-on policy as they leave the artifact boundary.
+pub fn render_audit(model: &RenderModel, findings: &[Finding], opts: &ReportOptions) -> String {
+    let red = Red::new(opts.redact);
+    let mut out = String::new();
+    header(&mut out, model, opts);
+    overview(&mut out, model);
+    findings_section(&mut out, findings, &red);
+    out
+}
+
+fn findings_section(out: &mut String, findings: &[Finding], red: &Red) {
+    out.push_str("\n## Findings\n");
+    if findings.is_empty() {
+        out.push_str("\n_(no findings)_\n");
+        return;
+    }
+    let counts = severity_counts(findings);
+    let _ = writeln!(
+        out,
+        "\n{} finding(s): {} error · {} warn · {} info\n",
+        findings.len(),
+        counts.0,
+        counts.1,
+        counts.2
+    );
+    // Findings arrive pre-sorted (severity, class, dashboard, panel,
+    // message); group by severity preserving that order.
+    use crate::audit::Severity;
+    for sev in [Severity::Error, Severity::Warn, Severity::Info] {
+        let group: Vec<&Finding> = findings.iter().filter(|f| f.severity == sev).collect();
+        if group.is_empty() {
+            continue;
+        }
+        let _ = writeln!(out, "\n### {}\n", sev.label());
+        out.push_str("| check | dashboard | panel | message | source |\n");
+        out.push_str("|-------|-----------|-------|---------|--------|\n");
+        for f in group {
+            let dashboard = if f.dashboard_uid.is_empty() {
+                "—".to_owned()
+            } else {
+                format!("{} ({})", f.dashboard_title, f.dashboard_uid)
+            };
+            let panel = match (f.panel_id, &f.panel_title) {
+                (Some(id), Some(t)) if !t.is_empty() => format!("{t} (#{id})"),
+                (Some(id), _) => format!("#{id}"),
+                (None, _) => "—".to_owned(),
+            };
+            let source = if f.source_artifact.is_empty() {
+                "—".to_owned()
+            } else {
+                f.source_artifact.clone()
+            };
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {} | {} |",
+                cell(f.class),
+                cell(&dashboard),
+                cell(&panel),
+                cell(&red.text(&f.message)),
+                cell(&source),
+            );
+        }
+    }
+}
+
+fn severity_counts(findings: &[Finding]) -> (usize, usize, usize) {
+    use crate::audit::Severity;
+    let mut c = (0, 0, 0);
+    for f in findings {
+        match f.severity {
+            Severity::Error => c.0 += 1,
+            Severity::Warn => c.1 += 1,
+            Severity::Info => c.2 += 1,
+        }
+    }
+    c
+}
+
 /// The metadata header (REPORT §4): mode, data on/off + window, scope,
 /// on-disk-vs-inventory counts, redacted flag.
 fn header(out: &mut String, model: &RenderModel, opts: &ReportOptions) {
@@ -31,6 +113,7 @@ fn header(out: &mut String, model: &RenderModel, opts: &ReportOptions) {
     let mode = match opts.mode {
         Mode::Overview => "overview",
         Mode::Full => "full",
+        Mode::Audit => "audit",
     };
     let data = if opts.data {
         format!("on ({})", opts.window)

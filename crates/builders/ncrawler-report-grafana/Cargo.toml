@@ -17,6 +17,7 @@ ncrawler-redact = { workspace = true }
 starter-spi     = { workspace = true }
 
 serde_json  = { workspace = true }
+blake3      = { workspace = true }
 async-trait = { workspace = true }
 chrono      = { workspace = true }
 tracing     = { workspace = true }

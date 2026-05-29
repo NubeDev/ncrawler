@@ -38,8 +38,13 @@ fn fixtures() -> PathBuf {
 /// the case's fixture files, returning `(sidecar_dir, dashboard_dirs)`.
 fn lay_out(case: &str, dashboards: &[&str]) -> (PathBuf, Vec<PathBuf>) {
     let src = fixtures().join(case);
+    // Unique per call: two tests can share a `case` fixture, so keying the
+    // temp dir on (pid, case) alone races (one test's remove_dir_all wipes
+    // the other's layout). A monotonic counter keeps each layout isolated.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!(
-        "ncrawler-grafana-golden-{case}-{}",
+        "ncrawler-grafana-golden-{case}-{}-{seq}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&tmp);
