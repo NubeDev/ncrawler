@@ -23,11 +23,16 @@ pub mod client;
 pub mod instance;
 pub mod interp;
 pub mod merge;
+pub mod multi;
 pub mod resolve;
 pub mod selector;
 pub mod visual;
 
 pub use client::{resolve_token, GrafanaClient, GrafanaCrateClient, RendererClient};
+pub use multi::{
+    scrape_selection, DashboardError, MultiConfig, MultiSummary, SidecarOutcome,
+    DEFAULT_CONCURRENCY, DEFAULT_SIDECAR_MAX_AGE_SECS,
+};
 pub use selector::{
     parse_inventory, DashboardEntry, DashboardSelector, Resolution, SelectorError, MAX_LIMIT,
 };
@@ -51,6 +56,62 @@ impl GrafanaScraper {
     /// A scraper that resolves tokens from `store` first.
     pub fn with_store(store: Arc<dyn SecretStore>) -> Self {
         Self { store: Some(store) }
+    }
+
+    /// Multi-dashboard API-mode scrape (REPORT §8 step 3).
+    ///
+    /// Resolves `selector` against the live `/api/search` inventory,
+    /// writes the `_instance/<host>` sidecar once (refreshing a stale
+    /// one), then fans out one per-dashboard artifact per resolved uid
+    /// under the configured concurrency cap, persisting each into the
+    /// store rooted at `job.options["out"]` (default `./artifacts`).
+    /// Per-dashboard failures are collected, never fatal to siblings.
+    ///
+    /// Unlike [`Scraper::scrape`] this writes artifacts itself (it emits
+    /// many), so the CLI does not re-`write` the result.
+    pub async fn scrape_multi(
+        &self,
+        job: &ScrapeJob,
+        selector: &selector::DashboardSelector,
+        config: &multi::MultiConfig,
+        cancel: &dyn Cancel,
+    ) -> Result<multi::MultiSummary, ScrapeError> {
+        if cancel.is_cancelled() {
+            return Err(ScrapeError::Cancelled);
+        }
+        let url = job
+            .options
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ScrapeError::Other("grafana job is missing `url` option".to_owned()))?;
+        let host = Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| "unknown-host".to_owned());
+        let token = resolve_token(&host, self.store.as_deref());
+        let client = GrafanaCrateClient::new(url, token.as_ref())?;
+
+        let out = job
+            .options
+            .get("out")
+            .and_then(Value::as_str)
+            .unwrap_or("./artifacts");
+        let store = ncrawler_core::ArtifactStore::new(out);
+        let fetched_at = chrono::Utc::now();
+
+        multi::scrape_selection(
+            &client,
+            &store,
+            &host,
+            selector,
+            &job.options,
+            &job.allow_hosts,
+            fetched_at,
+            config,
+            cancel,
+        )
+        .await
     }
 }
 

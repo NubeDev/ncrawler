@@ -79,6 +79,16 @@ async fn run_scrape(source: &str, out: std::path::PathBuf, rest: &[String]) -> R
     use ncrawler_spi::{ScrapeJob, Scraper};
 
     let allow_hosts = flag_values(rest, "--allow-host");
+
+    // Grafana API mode fans out the whole DashboardSelector in one
+    // invocation (REPORT §8 step 3), writing many per-dashboard artifacts
+    // + the `_instance` sidecar itself, so it does NOT go through the
+    // single-artifact `scrape` + `write` path below. Visual/both stay
+    // single-dashboard.
+    if source == "grafana" && grafana_mode(rest) == "api" {
+        return run_grafana_multi(&out, rest, allow_hosts).await;
+    }
+
     let (job, scraper): (ScrapeJob, Box<dyn Scraper>) = match source {
         "grafana" => (
             grafana_job(&out, rest, allow_hosts)?,
@@ -166,11 +176,10 @@ fn grafana_job(
 }
 
 /// Reduce a parsed [`DashboardSelector`] to the single dashboard uid the
-/// current single-target scraper can handle. A lone `--uid x` resolves to
-/// `x`; `--all` / `--name` / `--folder` / `--tag` / a multi-uid list all
-/// need the live `/api/search` fan-out that lands in the next stage, so we
-/// reject them with an actionable message rather than scraping the wrong
-/// dashboard.
+/// single-target (visual/both) scraper handles. A lone `--uid x` resolves
+/// to `x`; `--all` / `--name` / `--folder` / `--tag` / a multi-uid list
+/// need the live `/api/search` fan-out, which is API-mode only — so we
+/// reject them here with an actionable message pointing at `--mode api`.
 fn single_uid_target(selector: &ncrawler_grafana::DashboardSelector) -> Result<String> {
     let only_uids = !selector.all
         && selector.name.is_none()
@@ -181,10 +190,83 @@ fn single_uid_target(selector: &ncrawler_grafana::DashboardSelector) -> Result<S
         [uid] if only_uids => Ok(uid.clone()),
         _ => anyhow::bail!(
             "multi-dashboard grafana scrape (--all / --name / --folder / --tag, \
-             or a multi-uid --uid list) needs the live /api/search fan-out that \
-             lands in the next stage; for now pin exactly one `--uid <uid>`"
+             or a multi-uid --uid list) is API-mode only; re-run with `--mode api` \
+             to fan out, or pin exactly one `--uid <uid>` for visual/both"
         ),
     }
+}
+
+/// The resolved grafana scrape mode (default `both`, matching the
+/// single-dashboard visual path).
+fn grafana_mode(rest: &[String]) -> String {
+    flag_value(rest, "--mode").unwrap_or_else(|| "both".to_owned())
+}
+
+/// API-mode grafana scrape: resolve the [`DashboardSelector`] against the
+/// live `/api/search` inventory and fan out one per-dashboard artifact per
+/// resolved uid under a bounded concurrency cap, emitting the `_instance`
+/// sidecar once (REPORT §8 step 3). Writes its own artifacts.
+async fn run_grafana_multi(
+    out: &std::path::Path,
+    rest: &[String],
+    allow_hosts: Vec<String>,
+) -> Result<()> {
+    use ncrawler_grafana::{DashboardSelector, GrafanaScraper, MultiConfig};
+    use ncrawler_spi::ScrapeJob;
+
+    let url = flag_value(rest, "--url").context("grafana scrape needs --url")?;
+    let selector =
+        DashboardSelector::from_args(rest).context("parsing the grafana dashboard selector")?;
+
+    let mut options = serde_json::Map::new();
+    options.insert("url".into(), url.into());
+    options.insert("mode".into(), "api".into());
+    options.insert("out".into(), out.display().to_string().into());
+    if let Some(f) = flag_value(rest, "--from") {
+        options.insert("from".into(), f.into());
+    }
+    if let Some(t) = flag_value(rest, "--to") {
+        options.insert("to".into(), t.into());
+    }
+
+    let mut config = MultiConfig::default();
+    if let Some(c) = flag_value(rest, "--concurrency").and_then(|v| v.parse::<usize>().ok()) {
+        config.concurrency = c.max(1);
+    }
+    if let Some(secs) = flag_value(rest, "--sidecar-max-age").and_then(|v| v.parse::<i64>().ok()) {
+        config.sidecar_max_age = chrono::Duration::seconds(secs.max(0));
+    }
+
+    let job = ScrapeJob {
+        source: "grafana".into(),
+        // Multi-dashboard runs resolve their own per-dashboard targets.
+        target: String::new(),
+        allow_hosts,
+        options: serde_json::Value::Object(options),
+    };
+
+    let cancel = starter_ai::TokenCancel::new();
+    let cancel_signal = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::warn!("interrupt received; cancelling scrape");
+            cancel_signal.cancel();
+        }
+    });
+
+    let summary = GrafanaScraper::new()
+        .scrape_multi(&job, &selector, &config, &cancel)
+        .await
+        .map_err(|e| anyhow::anyhow!("scrape failed: {e}"))?;
+
+    println!("{}", summary.summary_line());
+    if !summary.failed.is_empty() {
+        eprintln!("failed dashboards ({}):", summary.failed.len());
+        for f in &summary.failed {
+            eprintln!("  {} — {}", f.uid, f.error);
+        }
+    }
+    Ok(())
 }
 
 /// Build a spider [`ScrapeJob`] from the trailing flags.
