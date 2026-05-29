@@ -37,8 +37,9 @@ async fn mount_happy(server: &MockServer, ds_query_body: Value) {
             "uid": "abc",
             "title": "Prod overview",
             "panels": [
-                { "id": 2, "title": "CPU", "tags": ["cpu"], "targets": [] },
-                { "id": 5, "title": "Mem", "targets": [] },
+                { "id": 2, "title": "CPU", "tags": ["cpu"], "targets": [{ "refId": "A" }] },
+                { "id": 5, "title": "Mem", "targets": [{ "refId": "A" }] },
+                { "id": 7, "type": "text", "title": "notes", "targets": [{ "refId": "A" }] },
                 { "type": "row", "title": "a row, no id" }
             ]
         }
@@ -74,10 +75,16 @@ async fn scrape_api_success_emits_one_item_per_panel() {
         .await
         .expect("scrape succeeds");
 
-    // Two real panels (ids 2 and 5); the id-less row is skipped.
-    assert_eq!(artifact.items.len(), 2);
+    // Panels 2, 5 (data) and 7 (text, metadata-only); the id-less row is
+    // skipped. The text panel is emitted but never queried.
+    assert_eq!(artifact.items.len(), 3);
     assert_eq!(artifact.items[0].id, "panel-2");
     assert_eq!(artifact.items[1].id, "panel-5");
+    assert_eq!(artifact.items[2].id, "panel-7");
+    assert!(
+        artifact.items[2].data.is_none(),
+        "text panel must not be queried"
+    );
     assert_eq!(artifact.items[0].tags, vec!["cpu".to_owned()]);
     assert_eq!(artifact.source, "grafana");
     // Dashboard JSON + companion endpoints land in meta.
@@ -252,5 +259,5 @@ async fn scrape_allows_listed_datasource_host() {
     )
     .await
     .expect("allowed host passes SSRF guard");
-    assert_eq!(artifact.items.len(), 2);
+    assert_eq!(artifact.items.len(), 3);
 }

@@ -126,16 +126,20 @@ async fn crawl(job: &ScrapeJob, opts: &SpiderOpts) -> Result<Vec<(String, String
         .with_delay(opts.delay_ms)
         .with_respect_robots_txt(opts.respect_robots)
         .with_concurrency_limit(opts.concurrency);
-    website.crawl().await;
 
-    let pages = website
-        .get_pages()
-        .map(|ps| {
-            ps.iter()
-                .map(|p| (p.get_url().to_owned(), p.get_html()))
-                .collect()
-        })
-        .unwrap_or_default();
+    // Spider delivers pages via a broadcast channel; subscribe before crawl.
+    let mut rx = website.subscribe(512);
+    let crawl_handle = tokio::spawn(async move {
+        website.crawl().await;
+        website.unsubscribe();
+    });
+
+    let mut pages = Vec::new();
+    while let Ok(page) = rx.recv().await {
+        pages.push((page.get_url().to_string(), page.get_html()));
+    }
+    crawl_handle.await.map_err(|e| ScrapeError::Other(e.to_string()))?;
+
     Ok(pages)
 }
 

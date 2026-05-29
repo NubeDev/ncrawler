@@ -42,8 +42,8 @@ async fn mount_dashboard(server: &MockServer) {
             "uid": "abc",
             "title": "Prod overview",
             "panels": [
-                { "id": 2, "title": "CPU", "tags": ["cpu"], "targets": [] },
-                { "id": 5, "title": "Mem", "targets": [] },
+                { "id": 2, "title": "CPU", "tags": ["cpu"], "targets": [{ "refId": "A" }] },
+                { "id": 5, "title": "Mem", "targets": [{ "refId": "A" }] },
                 { "type": "row", "title": "a row, no id" }
             ]
         }

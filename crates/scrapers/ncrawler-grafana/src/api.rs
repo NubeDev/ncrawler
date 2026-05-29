@@ -10,6 +10,8 @@ use url::Url;
 use ncrawler_spi::{Artifact, Item, ItemKind, ScrapeError, ScrapeJob};
 
 use crate::client::GrafanaClient;
+use crate::interp::{parse_time, Interpolator};
+use crate::resolve::DatasourceResolver;
 
 /// Run the Api-mode scrape against `client` for the `uid` in `job.target`.
 pub async fn scrape(
@@ -20,6 +22,33 @@ pub async fn scrape(
     let dash = client.dashboard_by_uid(&job.target).await?;
     let panels = panel_list(&dash);
 
+    // Resolve the query time window (defaults match Grafana's `now-6h`..
+    // `now`) so `${__from}` / `${__to}` and the body's `from`/`to` agree.
+    let from_str = job
+        .options
+        .get("from")
+        .and_then(Value::as_str)
+        .unwrap_or("now-6h");
+    let to_str = job
+        .options
+        .get("to")
+        .and_then(Value::as_str)
+        .unwrap_or("now");
+    let from = parse_time(from_str, fetched_at);
+    let to = parse_time(to_str, fetched_at);
+    let interp = Interpolator::new(&dash, from, to);
+
+    // Datasource list is best-effort: without it we fall back to emitting
+    // queries with no `datasourceId` (Grafana may still resolve the org
+    // default), so a permissions/old-version failure here must not abort.
+    let resolver = match client.datasources().await {
+        Ok(ds) => DatasourceResolver::new(&ds),
+        Err(e) => {
+            tracing::warn!(error = %e, "GET /api/datasources failed; queries will omit datasourceId");
+            DatasourceResolver::empty()
+        }
+    };
+
     let mut items = Vec::with_capacity(panels.len());
     let mut ds_responses = Vec::new();
     for panel in &panels {
@@ -27,10 +56,35 @@ pub async fn scrape(
             // Rows and other id-less layout elements are not panels.
             continue;
         };
-        let body = query_body(panel);
-        let data = client.ds_query(&body).await?;
-        ds_responses.push(data.clone());
-        items.push(panel_item(panel_id, panel, Some(data)));
+        // Non-data panels (text/row/dashlist/...) carry no resolvable
+        // datasource; querying them yields a 400 from /api/ds/query. Emit
+        // them as metadata-only items rather than failing the scrape.
+        if !is_queryable(panel) {
+            items.push(panel_item(panel_id, panel, None));
+            continue;
+        }
+        let body = query_body(panel, &interp, &resolver, from, to);
+        // Every target was hidden/empty: nothing to query (Grafana 7.x
+        // 400s on an empty `queries` array). Emit metadata-only instead.
+        let has_queries = matches!(body["queries"].as_array(), Some(q) if !q.is_empty());
+        if !has_queries {
+            items.push(panel_item(panel_id, panel, None));
+            continue;
+        }
+        // A single panel's query failing (datasource shape the wrapper +
+        // raw() fallback both reject, transient datasource error, ...)
+        // must not abort the whole dashboard scrape: keep the panel as a
+        // metadata-only item and move on (SCOPE: best-effort meta).
+        match client.ds_query(&body).await {
+            Ok(data) => {
+                ds_responses.push(data.clone());
+                items.push(panel_item(panel_id, panel, Some(data)));
+            }
+            Err(e) => {
+                tracing::warn!(panel_id, error = %e, "panel ds/query failed; emitting metadata-only");
+                items.push(panel_item(panel_id, panel, None));
+            }
+        }
     }
 
     // SSRF guard: every absolute URL surfaced by the dashboard JSON and
@@ -62,14 +116,81 @@ pub(crate) fn panel_list(dash: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// Build the `/api/ds/query` body for one panel: its targets plus a
-/// default time window. Kept minimal; datasource-specific shaping is
-/// the `client.raw()` fallback's job.
-fn query_body(panel: &Value) -> Value {
+/// Whether a panel should be sent to `/api/ds/query`. Layout and static
+/// panels (rows, text, dashboard/plugin lists, ...) carry no resolvable
+/// datasource — and sometimes leftover `targets` — so querying them just
+/// yields a 400. A queryable panel has a non-layout type and at least one
+/// target.
+fn is_queryable(panel: &Value) -> bool {
+    const NON_DATA: &[&str] = &[
+        "row",
+        "text",
+        "dashlist",
+        "pluginlist",
+        "alertlist",
+        "news",
+        "welcome",
+        "gettingstarted",
+    ];
+    let ty = panel.get("type").and_then(Value::as_str).unwrap_or("");
+    if NON_DATA.contains(&ty) {
+        return false;
+    }
+    panel
+        .get("targets")
+        .and_then(Value::as_array)
+        .is_some_and(|t| !t.is_empty())
+}
+
+/// Build the `/api/ds/query` body for one panel. Each target is
+/// interpolated (dashboard variables + `${__from}`/`${__to}`) and tagged
+/// with the numeric `datasourceId` Grafana's query endpoint requires,
+/// resolved from the target's or panel's `datasource` reference (falling
+/// back to the org default). `intervalMs` / `maxDataPoints` are derived
+/// from the window so backend SQL macros (`$__timeGroup`, `$__interval`)
+/// have sane values. `from`/`to` are epoch-ms strings matching the
+/// interpolated `${__from}`/`${__to}`.
+fn query_body(
+    panel: &Value,
+    interp: &Interpolator,
+    resolver: &DatasourceResolver,
+    from: chrono::DateTime<chrono::Utc>,
+    to: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    let from_ms = from.timestamp_millis();
+    let to_ms = to.timestamp_millis();
+    // ~100 buckets across the window, floored at 1s (matches Grafana's
+    // default max-data-points heuristic closely enough for backend macros).
+    let max_data_points: i64 = 100;
+    let interval_ms = ((to_ms - from_ms) / max_data_points).max(1000);
+    let panel_ds = panel.get("datasource");
+
+    let targets = panel.get("targets").and_then(Value::as_array);
+    let queries: Vec<Value> = targets
+        .map(|ts| {
+            ts.iter()
+                .filter(|t| !t.get("hide").and_then(Value::as_bool).unwrap_or(false))
+                .map(|t| {
+                    let mut q = interp.interpolate_value(t);
+                    let ds_ref = t.get("datasource").or(panel_ds);
+                    if let Some((id, name)) = resolver.resolve(ds_ref, interp) {
+                        let obj = q.as_object_mut().expect("target is a JSON object");
+                        obj.insert("datasourceId".into(), id.into());
+                        obj.entry("datasource").or_insert(Value::String(name));
+                    }
+                    let obj = q.as_object_mut().expect("target is a JSON object");
+                    obj.entry("intervalMs").or_insert(interval_ms.into());
+                    obj.entry("maxDataPoints").or_insert(max_data_points.into());
+                    q
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     json!({
-        "queries": panel.get("targets").cloned().unwrap_or(Value::Array(vec![])),
-        "from": "now-6h",
-        "to": "now",
+        "queries": queries,
+        "from": from_ms.to_string(),
+        "to": to_ms.to_string(),
     })
 }
 

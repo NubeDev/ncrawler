@@ -25,6 +25,12 @@ pub trait GrafanaClient: Send + Sync {
     /// `GET /api/search` — dashboard/folder discovery.
     async fn search(&self) -> Result<Value, ScrapeError>;
 
+    /// `GET /api/datasources` — list configured datasources (id, uid,
+    /// name, type, isDefault) so panel `datasource` references can be
+    /// resolved to the numeric `datasourceId` Grafana's `/api/ds/query`
+    /// requires.
+    async fn datasources(&self) -> Result<Value, ScrapeError>;
+
     /// `GET /api/annotations` — annotation list.
     async fn annotations(&self) -> Result<Value, ScrapeError>;
 }
@@ -230,6 +236,16 @@ impl GrafanaClient for GrafanaCrateClient {
         self.inner
             .openapi()
             .get_annotations::<Value>(None)
+            .await
+            .map_err(map_err)
+    }
+
+    async fn datasources(&self) -> Result<Value, ScrapeError> {
+        // No generated wrapper for the datasource list, so go through the
+        // `raw()` escape hatch (the same one `ds_query` falls back to).
+        self.inner
+            .raw()
+            .request_json::<Value, (), ()>(http::Method::GET, &["datasources"], None, None)
             .await
             .map_err(map_err)
     }

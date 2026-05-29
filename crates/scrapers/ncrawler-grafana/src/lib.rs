@@ -20,7 +20,9 @@ use ncrawler_spi::{Artifact, Cancel, ScrapeError, ScrapeJob, Scraper};
 pub mod api;
 pub mod chrome;
 pub mod client;
+pub mod interp;
 pub mod merge;
+pub mod resolve;
 pub mod visual;
 
 pub use client::{resolve_token, GrafanaClient, GrafanaCrateClient, RendererClient};
