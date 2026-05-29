@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "source": "grafana",
+  "target": "rubix-dash",
+  "fetched_at": "2026-05-29T06:00:00Z",
+  "items": [
+    {
+      "id": "panel-4", "kind": "panel", "title": "Live point", "text": "", "tags": [],
+      "data": {
+        "results": {
+          "A": {
+            "frames": [
+              {
+                "schema": { "fields": [ { "name": "value" } ] },
+                "data": { "values": [ [42] ] }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "assets": [],
+  "meta": {
+    "dashboard": {
+      "meta": { "folderTitle": "Energy" },
+      "dashboard": {
+        "uid": "rubix-dash",
+        "title": "Rubix Live",
+        "tags": ["live"],
+        "templating": { "list": [] },
+        "panels": [
+          {
+            "id": 4, "title": "Live point", "type": "stat",
+            "datasource": { "type": "grafana-rubix-os-data-source", "uid": "rbx1" },
+            "targets": [ { "refId": "A", "rawSql": "SELECT value FROM points WHERE id = 1" } ]
+          }
+        ]
+      }
+    },
+    "annotations": []
+  }
+}

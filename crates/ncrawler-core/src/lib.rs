@@ -6,10 +6,12 @@
 //! schema versions.
 
 mod error;
+mod sidecar;
 mod since;
 mod store;
 
 pub use error::StoreError;
+pub use sidecar::{FactsOrigin, InstanceFacts, InstanceSidecar, INSTANCE_SCHEMA_VERSION};
 pub use since::parse_since;
 pub use store::{dir_name, read_artifact, safe, ArtifactStore, ListEntry};
 

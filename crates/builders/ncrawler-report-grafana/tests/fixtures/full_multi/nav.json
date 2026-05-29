@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "source": "grafana",
+  "target": "nav",
+  "fetched_at": "2026-05-29T06:00:00Z",
+  "items": [],
+  "assets": [],
+  "meta": {
+    "dashboard": {
+      "meta": {},
+      "dashboard": {
+        "uid": "nav",
+        "title": "0. Navigation",
+        "tags": [],
+        "links": [ { "title": "Energy portal" } ],
+        "panels": [
+          { "id": 1, "title": "All dashboards", "type": "dashlist" },
+          { "id": 2, "title": "Welcome", "type": "text", "targets": [] }
+        ]
+      }
+    },
+    "annotations": []
+  }
+}

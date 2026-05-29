@@ -191,9 +191,20 @@ inventory 1000×. Fix: write instance-wide data **once** to a sidecar
 artifact and have per-dashboard artifacts stop duplicating it.
 
 ```
-artifacts/grafana/_instance/latest/instance.json   # search, datasources, instance, folders
-artifacts/grafana/<uid>/latest/artifact.json       # this dashboard only (panels + data)
+# sidecar — one per (instance, run); `latest` -> newest timestamped dir
+artifacts/grafana/_instance/<host>/<rfc3339-utc>__instance/instance.json   # search, datasources, instance, folders
+artifacts/grafana/_instance/<host>/latest -> <rfc3339-utc>__instance
+artifacts/grafana/<uid>/latest/artifact.json                               # this dashboard only (panels + data)
 ```
+
+> **Stage-1 layout note (impl-accurate).** The sidecar is nested per
+> `<host>` and timestamped like every other artifact dir, with the same
+> `0700` + `latest`-symlink discipline as the main store (one store, not a
+> fork): `_instance/<host>/<rfc3339-utc>__instance/instance.json`. The
+> reader resolves `(host, uid) -> InstanceFacts` from
+> `_instance/<host>/latest`, falling back to a legacy artifact's
+> `meta.search` (with a load-time `tracing::warn`) only when no sidecar is
+> present. `schema_version=1`.
 
 Sidecar contents (some already fetched during scrape, just not persisted):
 - `search` — dashboard inventory (titles, uids, folders, tags).

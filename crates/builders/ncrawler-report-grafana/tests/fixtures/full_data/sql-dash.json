@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "source": "grafana",
+  "target": "sql-dash",
+  "fetched_at": "2026-05-29T06:00:00Z",
+  "items": [
+    {
+      "id": "panel-3", "kind": "panel", "title": "Meter readings", "text": "", "tags": [],
+      "data": {
+        "results": {
+          "A": {
+            "frames": [
+              {
+                "schema": {
+                  "meta": { "executedQueryString": "SELECT id, kwh FROM meters WHERE key = 'deadbeefdeadbeefdeadbeefdeadbeef' LIMIT 100" },
+                  "fields": [ { "name": "id" }, { "name": "kwh" } ]
+                },
+                "data": { "values": [ [1, 2, 3], [10.5, 20.1, 30.0] ] }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "assets": [],
+  "meta": {
+    "dashboard": {
+      "meta": { "folderTitle": "Sites" },
+      "dashboard": {
+        "uid": "sql-dash",
+        "title": "Energy SQL",
+        "tags": ["energy"],
+        "templating": {
+          "list": [
+            { "name": "token", "current": { "value": "supersecretvalue" } },
+            { "name": "site", "current": { "value": "Lot 5" } }
+          ]
+        },
+        "panels": [
+          {
+            "id": 3, "title": "Meter readings", "type": "table",
+            "datasource": { "type": "postgres", "uid": "pg1" },
+            "targets": [ { "refId": "A", "rawSql": "SELECT id, kwh FROM meters WHERE key = 'deadbeefdeadbeefdeadbeefdeadbeef'" } ]
+          }
+        ]
+      }
+    },
+    "annotations": []
+  }
+}

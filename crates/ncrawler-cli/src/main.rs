@@ -70,6 +70,20 @@ fn flag_present(rest: &[String], flag: &str) -> bool {
     rest.iter().any(|a| a == flag)
 }
 
+/// Resolve the redaction toggle for a build. Default-on; `--no-redact`
+/// opts out explicitly and logs a WARN (REPORT §7). `--redact` is the
+/// explicit form of the default. `--no-redact` wins if both are given.
+fn resolve_redact(rest: &[String]) -> bool {
+    if flag_present(rest, "--no-redact") {
+        tracing::warn!(
+            "--no-redact: secret redaction DISABLED; the report may contain \
+             tokens, host UUIDs, and credential literals in cleartext"
+        );
+        return false;
+    }
+    true
+}
+
 /// Scrape a source into a fresh on-disk artifact. Grafana visual/both
 /// modes pre-write panel PNGs into the artifact's `assets/` dir
 /// (computed from `--out`); the store then writes `artifact.json` into
@@ -79,6 +93,16 @@ async fn run_scrape(source: &str, out: std::path::PathBuf, rest: &[String]) -> R
     use ncrawler_spi::{ScrapeJob, Scraper};
 
     let allow_hosts = flag_values(rest, "--allow-host");
+
+    // Grafana API mode fans out the whole DashboardSelector in one
+    // invocation (REPORT §8 step 3), writing many per-dashboard artifacts
+    // + the `_instance` sidecar itself, so it does NOT go through the
+    // single-artifact `scrape` + `write` path below. Visual/both stay
+    // single-dashboard.
+    if source == "grafana" && grafana_mode(rest) == "api" {
+        return run_grafana_multi(&out, rest, allow_hosts).await;
+    }
+
     let (job, scraper): (ScrapeJob, Box<dyn Scraper>) = match source {
         "grafana" => (
             grafana_job(&out, rest, allow_hosts)?,
@@ -121,10 +145,21 @@ fn grafana_job(
     rest: &[String],
     allow_hosts: Vec<String>,
 ) -> Result<ncrawler_spi::ScrapeJob> {
+    use ncrawler_grafana::DashboardSelector;
     use ncrawler_spi::ScrapeJob;
     let url = flag_value(rest, "--url").context("grafana scrape needs --url")?;
-    let uid = flag_value(rest, "--uid").context("grafana scrape needs --uid")?;
     let mode = flag_value(rest, "--mode").unwrap_or_else(|| "both".to_owned());
+
+    // The shared selector (REPORT §2) replaces the bare `--uid`: a single
+    // `--uid x` is now just the singleton case of `--uid a,b,c` / `--all`
+    // / `--name` / `--folder` / `--tag`. The live `/api/search` fan-out
+    // lands in the next stage; until then the scraper handles exactly one
+    // explicit uid, so resolve that case here and surface the rest with a
+    // clear message instead of silently scraping the wrong thing.
+    let selector =
+        DashboardSelector::from_args(rest).context("parsing the grafana dashboard selector")?;
+    let target = single_uid_target(&selector)?;
+
     let mut options = serde_json::Map::new();
     options.insert("url".into(), url.into());
     options.insert("mode".into(), mode.into());
@@ -148,10 +183,104 @@ fn grafana_job(
     }
     Ok(ScrapeJob {
         source: "grafana".into(),
-        target: uid,
+        target,
         allow_hosts,
         options: serde_json::Value::Object(options),
     })
+}
+
+/// Reduce a parsed [`DashboardSelector`] to the single dashboard uid the
+/// single-target (visual/both) scraper handles. A lone `--uid x` resolves
+/// to `x`; `--all` / `--name` / `--folder` / `--tag` / a multi-uid list
+/// need the live `/api/search` fan-out, which is API-mode only — so we
+/// reject them here with an actionable message pointing at `--mode api`.
+fn single_uid_target(selector: &ncrawler_grafana::DashboardSelector) -> Result<String> {
+    let only_uids = !selector.all
+        && selector.name.is_none()
+        && selector.folder.is_none()
+        && selector.tag.is_none()
+        && selector.limit.is_none();
+    match selector.uids.as_slice() {
+        [uid] if only_uids => Ok(uid.clone()),
+        _ => anyhow::bail!(
+            "multi-dashboard grafana scrape (--all / --name / --folder / --tag, \
+             or a multi-uid --uid list) is API-mode only; re-run with `--mode api` \
+             to fan out, or pin exactly one `--uid <uid>` for visual/both"
+        ),
+    }
+}
+
+/// The resolved grafana scrape mode (default `both`, matching the
+/// single-dashboard visual path).
+fn grafana_mode(rest: &[String]) -> String {
+    flag_value(rest, "--mode").unwrap_or_else(|| "both".to_owned())
+}
+
+/// API-mode grafana scrape: resolve the [`DashboardSelector`] against the
+/// live `/api/search` inventory and fan out one per-dashboard artifact per
+/// resolved uid under a bounded concurrency cap, emitting the `_instance`
+/// sidecar once (REPORT §8 step 3). Writes its own artifacts.
+async fn run_grafana_multi(
+    out: &std::path::Path,
+    rest: &[String],
+    allow_hosts: Vec<String>,
+) -> Result<()> {
+    use ncrawler_grafana::{DashboardSelector, GrafanaScraper, MultiConfig};
+    use ncrawler_spi::ScrapeJob;
+
+    let url = flag_value(rest, "--url").context("grafana scrape needs --url")?;
+    let selector =
+        DashboardSelector::from_args(rest).context("parsing the grafana dashboard selector")?;
+
+    let mut options = serde_json::Map::new();
+    options.insert("url".into(), url.into());
+    options.insert("mode".into(), "api".into());
+    options.insert("out".into(), out.display().to_string().into());
+    if let Some(f) = flag_value(rest, "--from") {
+        options.insert("from".into(), f.into());
+    }
+    if let Some(t) = flag_value(rest, "--to") {
+        options.insert("to".into(), t.into());
+    }
+
+    let mut config = MultiConfig::default();
+    if let Some(c) = flag_value(rest, "--concurrency").and_then(|v| v.parse::<usize>().ok()) {
+        config.concurrency = c.max(1);
+    }
+    if let Some(secs) = flag_value(rest, "--sidecar-max-age").and_then(|v| v.parse::<i64>().ok()) {
+        config.sidecar_max_age = chrono::Duration::seconds(secs.max(0));
+    }
+
+    let job = ScrapeJob {
+        source: "grafana".into(),
+        // Multi-dashboard runs resolve their own per-dashboard targets.
+        target: String::new(),
+        allow_hosts,
+        options: serde_json::Value::Object(options),
+    };
+
+    let cancel = starter_ai::TokenCancel::new();
+    let cancel_signal = cancel.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::warn!("interrupt received; cancelling scrape");
+            cancel_signal.cancel();
+        }
+    });
+
+    let summary = GrafanaScraper::new()
+        .scrape_multi(&job, &selector, &config, &cancel)
+        .await
+        .map_err(|e| anyhow::anyhow!("scrape failed: {e}"))?;
+
+    println!("{}", summary.summary_line());
+    if !summary.failed.is_empty() {
+        eprintln!("failed dashboards ({}):", summary.failed.len());
+        for f in &summary.failed {
+            eprintln!("  {} — {}", f.uid, f.error);
+        }
+    }
+    Ok(())
 }
 
 /// Build a spider [`ScrapeJob`] from the trailing flags.
@@ -186,17 +315,35 @@ fn spider_job(rest: &[String], allow_hosts: Vec<String>) -> Result<ncrawler_spi:
 /// `report-ai` streams a Claude run, wiring Ctrl-C through
 /// `starter_spi::ai::Cancel` (via `TokenCancel`) so a long run is
 /// cancellable mid-stream (SCOPE: cancellation).
-async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[String]) -> Result<()> {
+async fn run_build(
+    builder: &str,
+    artifact_dir: Option<std::path::PathBuf>,
+    rest: &[String],
+) -> Result<()> {
     use ncrawler_spi::{BuildCtx, Builder};
 
+    // `report-grafana` renders over the whole on-disk store (the
+    // `_instance` sidecar + the selected per-dashboard artifacts), not a
+    // single artifact dir, so it has its own entry point (REPORT §6b).
+    if builder == "report-grafana" {
+        return run_report_grafana(rest).await;
+    }
+
+    let artifact_dir = artifact_dir
+        .context("this builder needs an <artifact-dir> (e.g. ./artifacts/grafana/<uid>/latest)")?;
     let artifact = read_artifact(&artifact_dir)
         .with_context(|| format!("reading artifact at {}", artifact_dir.display()))?;
     let mut options = serde_json::Map::new();
     if let Some(m) = flag_value(rest, "--model") {
         options.insert("model".into(), serde_json::Value::String(m));
     }
+    // Secret redaction is on by default (REPORT §7). `--no-redact` is an
+    // explicit, logged opt-out; `--redact` is accepted for symmetry.
+    let redact = resolve_redact(rest);
+    options.insert("redact".into(), serde_json::Value::Bool(redact));
     let ctx = BuildCtx {
         artifact_dir: artifact_dir.clone(),
+        dashboard_dirs: Vec::new(),
         options: serde_json::Value::Object(options),
     };
 
@@ -241,7 +388,8 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
         }
         other => {
             anyhow::bail!(
-                "build: unknown builder `{other}` (expected report-md | report-ai | vector)"
+                "build: unknown builder `{other}` \
+                 (expected report-md | report-grafana | report-ai | vector)"
             )
         }
     }
@@ -252,6 +400,122 @@ async fn run_build(builder: &str, artifact_dir: std::path::PathBuf, rest: &[Stri
         println!("  wrote {}", f.display());
     }
     Ok(())
+}
+
+/// `ncrawler build report-grafana [--store <dir>] [--mode overview|full|audit]
+/// [--data] [--window ...] [--redact|--no-redact] [--host <h>]
+/// [--all|--uid|--name|--folder|--tag|--limit ...]`.
+///
+/// Renders over the on-disk store: resolves the shared
+/// [`DashboardSelector`] (stage 2) against what was actually scraped for
+/// the instance, then writes `REPORT.md` next to the `_instance/<host>`
+/// sidecar's `latest` (REPORT §6b).
+async fn run_report_grafana(rest: &[String]) -> Result<()> {
+    use ncrawler_grafana::{parse_inventory, DashboardSelector};
+    use ncrawler_report_grafana::{build_report, Mode, ReportOptions};
+
+    let store_dir = flag_value(rest, "--store").unwrap_or_else(|| "./artifacts".to_owned());
+    let store = ArtifactStore::new(&store_dir);
+
+    let host = resolve_instance_host(&store, rest)?;
+    let sidecar = store
+        .read_instance_sidecar("grafana", &host)?
+        .with_context(|| format!("no _instance sidecar for host `{host}` under {store_dir}"))?;
+
+    // The full instance inventory the sidecar recorded at scrape time.
+    let inventory = parse_inventory(&sidecar.search);
+    // What is actually on disk: inventory entries with a per-dashboard
+    // `latest` artifact present (report-time `--all` is on-disk-only).
+    let on_disk: Vec<_> = inventory
+        .iter()
+        .filter(|e| store.latest_link("grafana", &e.uid).exists())
+        .cloned()
+        .collect();
+
+    let selector =
+        DashboardSelector::from_args(rest).context("parsing the grafana dashboard selector")?;
+    let resolution = selector.resolve_on_disk(&on_disk, inventory.len());
+
+    let dashboard_dirs: Vec<std::path::PathBuf> = resolution
+        .uids()
+        .iter()
+        .map(|uid| store.latest_link("grafana", uid))
+        .collect();
+    let sidecar_dir = store.instance_latest_link("grafana", &host);
+
+    let opts = ReportOptions {
+        mode: Mode::parse(&flag_value(rest, "--mode").unwrap_or_else(|| "overview".to_owned())),
+        data: flag_present(rest, "--data"),
+        window: flag_value(rest, "--window")
+            .unwrap_or_else(|| ncrawler_report_grafana::DEFAULT_WINDOW.to_owned()),
+        redact: resolve_redact(rest),
+    };
+
+    let cancel = starter_ai::TokenCancel::new();
+    let output = build_report(
+        &sidecar_dir,
+        &dashboard_dirs,
+        &selector_scope(&selector),
+        inventory.len(),
+        on_disk.len(),
+        &opts,
+        &cancel,
+    )
+    .map_err(|e| anyhow::anyhow!("report-grafana build failed: {e}"))?;
+
+    println!("{}", output.summary);
+    for f in &output.files {
+        println!("  wrote {}", sidecar_dir.join(f).display());
+    }
+    Ok(())
+}
+
+/// Pick the Grafana instance to report on. `--host` is explicit; otherwise
+/// use the sole scraped host, or error listing the choices when ambiguous.
+fn resolve_instance_host(store: &ArtifactStore, rest: &[String]) -> Result<String> {
+    if let Some(h) = flag_value(rest, "--host") {
+        return Ok(h);
+    }
+    let hosts = store.list_instance_hosts("grafana")?;
+    match hosts.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => anyhow::bail!(
+            "no grafana _instance sidecar found; run `ncrawler scrape grafana --mode api …` first"
+        ),
+        many => anyhow::bail!(
+            "multiple scraped grafana hosts ({}); disambiguate with --host <host>",
+            many.join(", ")
+        ),
+    }
+}
+
+/// A one-line scope description for the report header (REPORT §4), echoing
+/// the selector flags the operator passed.
+fn selector_scope(sel: &ncrawler_grafana::DashboardSelector) -> String {
+    let mut parts = Vec::new();
+    if sel.all {
+        parts.push("--all".to_owned());
+    }
+    if !sel.uids.is_empty() {
+        parts.push(format!("--uid {}", sel.uids.join(",")));
+    }
+    if let Some(n) = &sel.name {
+        parts.push(format!("--name {n}"));
+    }
+    if let Some(f) = &sel.folder {
+        parts.push(format!("--folder {f}"));
+    }
+    if let Some(t) = &sel.tag {
+        parts.push(format!("--tag {t}"));
+    }
+    if let Some(l) = sel.limit {
+        parts.push(format!("--limit {l}"));
+    }
+    if parts.is_empty() {
+        "(no selection)".to_owned()
+    } else {
+        parts.join(" ")
+    }
 }
 
 fn run_ls(source: Option<String>, since: Option<String>, out: std::path::PathBuf) -> Result<()> {

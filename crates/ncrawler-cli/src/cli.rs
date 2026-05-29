@@ -30,10 +30,13 @@ pub enum Command {
     },
     /// Build a derived artifact from an existing scrape.
     Build {
-        /// Builder name, e.g. `report-md` | `report-ai` | `vector`.
+        /// Builder name, e.g. `report-md` | `report-ai` | `vector` |
+        /// `report-grafana`.
         builder: String,
-        /// Artifact directory (accepts a `latest` symlink).
-        artifact_dir: PathBuf,
+        /// Artifact directory (accepts a `latest` symlink). Required by the
+        /// single-artifact builders; `report-grafana` renders over the
+        /// whole store instead (use `--store`), so it is optional.
+        artifact_dir: Option<PathBuf>,
         /// Builder-specific flags, forwarded verbatim once implemented.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         rest: Vec<String>,
