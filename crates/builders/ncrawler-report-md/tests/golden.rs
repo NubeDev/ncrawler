@@ -88,3 +88,72 @@ async fn build_writes_report_file() {
     assert_eq!(written, render(&artifact));
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// An artifact whose `data` carries a secret-ish literal (a long hex
+/// token). The builder must mask it by default and emit it verbatim
+/// under `--no-redact`.
+fn secret_artifact() -> Artifact {
+    let mut artifact = Artifact::new("grafana", "abc", "2026-05-29T00:00:00Z".parse().unwrap());
+    artifact.items = vec![Item {
+        id: "panel-1".to_owned(),
+        kind: ItemKind::Panel,
+        title: Some("Auth".to_owned()),
+        text: "Bearer abcdef0123456789abcdef0123".to_owned(),
+        data: Some(serde_json::json!({
+            "rawSql": "SELECT * FROM t WHERE token = 'deadbeefdeadbeefdeadbeefdeadbeef'"
+        })),
+        tags: vec![],
+    }];
+    artifact
+}
+
+async fn build_to_string(artifact: &Artifact, options: serde_json::Value) -> String {
+    let dir = std::env::temp_dir().join(format!(
+        "ncrawler-md-redact-{}-{:p}",
+        std::process::id(),
+        artifact
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let ctx = BuildCtx {
+        artifact_dir: dir.clone(),
+        options,
+    };
+    MarkdownBuilder::new()
+        .build(artifact, &ctx, &NeverCancel)
+        .await
+        .expect("build succeeds");
+    let out = std::fs::read_to_string(dir.join(REPORT_FILENAME)).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    out
+}
+
+#[tokio::test]
+async fn build_redacts_by_default() {
+    let artifact = secret_artifact();
+    // Default (options Null) and explicit `redact: true` both mask.
+    for options in [
+        serde_json::Value::Null,
+        serde_json::json!({ "redact": true }),
+    ] {
+        let md = build_to_string(&artifact, options).await;
+        assert!(md.contains("***REDACTED***"), "secret should be masked");
+        assert!(
+            !md.contains("deadbeefdeadbeefdeadbeefdeadbeef"),
+            "raw hex token must not survive"
+        );
+        assert!(
+            !md.contains("abcdef0123456789abcdef0123"),
+            "raw bearer token must not survive"
+        );
+    }
+}
+
+#[tokio::test]
+async fn no_redact_is_a_true_bypass() {
+    let artifact = secret_artifact();
+    let md = build_to_string(&artifact, serde_json::json!({ "redact": false })).await;
+    // True bypass: byte-identical to the raw render, secrets intact, no mask.
+    assert_eq!(md, render(&artifact));
+    assert!(md.contains("deadbeefdeadbeefdeadbeefdeadbeef"));
+    assert!(!md.contains("***REDACTED***"));
+}

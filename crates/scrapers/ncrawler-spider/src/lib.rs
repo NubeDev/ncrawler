@@ -138,7 +138,9 @@ async fn crawl(job: &ScrapeJob, opts: &SpiderOpts) -> Result<Vec<(String, String
     while let Ok(page) = rx.recv().await {
         pages.push((page.get_url().to_string(), page.get_html()));
     }
-    crawl_handle.await.map_err(|e| ScrapeError::Other(e.to_string()))?;
+    crawl_handle
+        .await
+        .map_err(|e| ScrapeError::Other(e.to_string()))?;
 
     Ok(pages)
 }
