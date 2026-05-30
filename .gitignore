@@ -3,3 +3,8 @@
 Cargo.lock
 .env
 artifacts/
+.claude/
+vec/
+.fastembed_cache/
+.fastembed_cache/models--Xenova--bge-small-en-v1.5/
+.claude/scheduled_tasks.lock

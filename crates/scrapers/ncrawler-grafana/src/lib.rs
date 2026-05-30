@@ -18,17 +18,23 @@ use url::Url;
 use ncrawler_spi::{Artifact, Cancel, ScrapeError, ScrapeJob, Scraper};
 
 pub mod api;
+pub mod audit;
 pub mod chrome;
 pub mod client;
+pub mod data;
 pub mod instance;
 pub mod interp;
 pub mod merge;
 pub mod multi;
 pub mod resolve;
 pub mod selector;
+pub mod stage;
+pub mod status;
 pub mod visual;
 
+pub use audit::Audit;
 pub use client::{resolve_token, GrafanaClient, GrafanaCrateClient, RendererClient};
+pub use data::Selection;
 pub use multi::{
     scrape_selection, DashboardError, MultiConfig, MultiSummary, SidecarOutcome,
     DEFAULT_CONCURRENCY, DEFAULT_SIDECAR_MAX_AGE_SECS,
@@ -36,6 +42,8 @@ pub use multi::{
 pub use selector::{
     parse_inventory, DashboardEntry, DashboardSelector, Resolution, SelectorError, MAX_LIMIT,
 };
+pub use stage::Stage;
+pub use status::{DataStatus, PanelStatus};
 pub use visual::VisualOpts;
 
 /// The Grafana [`Scraper`]. Resolves the bearer token from the optional
@@ -130,11 +138,6 @@ impl Scraper for GrafanaScraper {
             .get("url")
             .and_then(Value::as_str)
             .ok_or_else(|| ScrapeError::Other("grafana job is missing `url` option".to_owned()))?;
-        let mode = job
-            .options
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("api");
 
         let host = Url::parse(url)
             .ok()
@@ -144,10 +147,66 @@ impl Scraper for GrafanaScraper {
         let client = GrafanaCrateClient::new(url, token.as_ref())?;
         let fetched_at = chrono::Utc::now();
 
+        // Staged pipeline (SCOPE: REPORTS-UPDATE). `audit` and `all` mint
+        // a fresh artifact directory through the store, so they run here;
+        // `data` / `report` operate on an existing dir and are driven
+        // from the CLI directly.
+        if let Some(stage) = job.options.get("stage").and_then(Value::as_str) {
+            let stage = Stage::parse(stage)
+                .ok_or_else(|| ScrapeError::Other(format!("unknown --stage `{stage}`")))?;
+            let assets_dir = assets_dir_for(&job, fetched_at)?;
+            let dir = assets_dir
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| assets_dir.clone());
+            let mut artifact = match stage {
+                Stage::Audit => stage::audit_artifact(&client, &job, url, &dir, fetched_at).await?,
+                Stage::All => stage::all_artifact(&client, &job, url, &dir, fetched_at).await?,
+                Stage::Data | Stage::Report => {
+                    return Err(ScrapeError::Other(format!(
+                        "--stage {stage:?} operates on an existing artifact dir; run it via the CLI",
+                    )))
+                }
+            };
+            // Optional early screenshot (`--with-shot`): one whole-dashboard
+            // chrome capture, reusing the best-effort visual fallback.
+            if job.options.get("with_shot").and_then(Value::as_bool) == Some(true) {
+                let mut opts = visual_opts(&job, url);
+                opts.base_url = url.to_owned();
+                opts.token = token.clone();
+                opts.fallback_chrome = true;
+                opts.whole_dashboard = true;
+                // Build the kiosk dashboard URL `<base>/d/<uid>?kiosk=tv` so
+                // the capture lands on the dashboard itself, not the home
+                // page (`visual_opts` only does this when `visual_whole` is
+                // set, which `--with-shot` does not go through).
+                let base = url.trim_end_matches('/');
+                opts.dashboard_url = format!(
+                    "{base}/d/{uid}/dashboard?kiosk=tv&from={from}&to={to}",
+                    uid = job.target,
+                    from = opts.from,
+                    to = opts.to,
+                );
+                match chrome::fallback_screenshot(&opts, &assets_dir).await {
+                    Ok(assets) => artifact.assets = assets,
+                    Err(e) => tracing::warn!(error = %e, "--with-shot screenshot failed"),
+                }
+            }
+            return Ok(artifact);
+        }
+
+        let mode = job
+            .options
+            .get("mode")
+            .and_then(Value::as_str)
+            .unwrap_or("api");
+
         let artifact = match mode {
-            "api" => api::scrape(&client, &job, fetched_at).await?,
+            "api" => api::scrape(&client, &job, fetched_at).await,
             "visual" | "both" => {
-                let opts = visual_opts(&job, url);
+                let mut opts = visual_opts(&job, url);
+                opts.base_url = url.to_owned();
+                opts.token = token.clone();
                 if opts.fallback_chrome {
                     tracing::warn!(
                         "--visual-fallback chrome enabled: the chromiumoxide path is \
@@ -157,14 +216,14 @@ impl Scraper for GrafanaScraper {
                 }
                 let renderer = RendererClient::new(url, token)?;
                 let assets_dir = assets_dir_for(&job, fetched_at)?;
-                if mode == "visual" {
+                Ok(if mode == "visual" {
                     visual::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await?
                 } else {
                     merge::scrape(&client, &renderer, &job, &opts, &assets_dir, fetched_at).await?
-                }
+                })
             }
             other => return Err(ScrapeError::ModeUnsupported(other.to_owned())),
-        };
+        }?;
 
         // Instance sidecar: written ONCE per scrape run (all API-backed
         // modes), so per-dashboard artifacts stop duplicating the
@@ -209,9 +268,26 @@ async fn write_instance_sidecar(
 /// Parse the visual knobs out of `job.options`, defaulting per SCOPE.
 fn visual_opts(job: &ScrapeJob, dashboard_url: &str) -> VisualOpts {
     let o = &job.options;
+    // For whole-dashboard chrome capture we need `<base>/d/<uid>?kiosk=tv`.
+    let whole = o.get("visual_whole").and_then(Value::as_bool).unwrap_or(false);
+    let base = dashboard_url.trim_end_matches('/');
+    let dash_url = if whole {
+        let from = o
+            .get("from")
+            .and_then(Value::as_str)
+            .unwrap_or("now-6h");
+        let to = o.get("to").and_then(Value::as_str).unwrap_or("now");
+        format!(
+            "{base}/d/{uid}/dashboard?kiosk=tv&from={from}&to={to}",
+            uid = job.target
+        )
+    } else {
+        dashboard_url.to_owned()
+    };
     let mut v = VisualOpts {
-        dashboard_url: dashboard_url.to_owned(),
+        dashboard_url: dash_url,
         fallback_chrome: o.get("visual_fallback").and_then(Value::as_str) == Some("chrome"),
+        whole_dashboard: whole,
         ..VisualOpts::default()
     };
     if let Some(w) = o.get("width").and_then(Value::as_u64) {

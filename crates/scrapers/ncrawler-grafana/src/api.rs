@@ -38,6 +38,17 @@ pub async fn scrape(
     let to = parse_time(to_str, fetched_at);
     let interp = Interpolator::new(&dash, from, to);
 
+    // Per-panel query timeout. Big time-series backends (TimescaleDB
+    // hypertables, ...) can hang a single `/api/ds/query` indefinitely;
+    // without a cap one slow panel stalls the whole dashboard sweep.
+    // `0` disables it; default is 30s (matches Grafana's dataproxy).
+    let query_timeout = job
+        .options
+        .get("query_timeout_secs")
+        .and_then(Value::as_u64)
+        .unwrap_or(30);
+    let query_timeout = (query_timeout > 0).then(|| std::time::Duration::from_secs(query_timeout));
+
     // Datasource list is best-effort: without it we fall back to emitting
     // queries with no `datasourceId` (Grafana may still resolve the org
     // default), so a permissions/old-version failure here must not abort.
@@ -75,7 +86,7 @@ pub async fn scrape(
         // raw() fallback both reject, transient datasource error, ...)
         // must not abort the whole dashboard scrape: keep the panel as a
         // metadata-only item and move on (SCOPE: best-effort meta).
-        match client.ds_query(&body).await {
+        match run_query(client, &body, query_timeout).await {
             Ok(data) => {
                 ds_responses.push(data.clone());
                 items.push(panel_item(panel_id, panel, Some(data)));
@@ -122,7 +133,7 @@ pub(crate) fn panel_list(dash: &Value) -> Vec<Value> {
 /// datasource — and sometimes leftover `targets` — so querying them just
 /// yields a 400. A queryable panel has a non-layout type and at least one
 /// target.
-fn is_queryable(panel: &Value) -> bool {
+pub(crate) fn is_queryable(panel: &Value) -> bool {
     const NON_DATA: &[&str] = &[
         "row",
         "text",
@@ -151,7 +162,7 @@ fn is_queryable(panel: &Value) -> bool {
 /// from the window so backend SQL macros (`$__timeGroup`, `$__interval`)
 /// have sane values. `from`/`to` are epoch-ms strings matching the
 /// interpolated `${__from}`/`${__to}`.
-fn query_body(
+pub(crate) fn query_body(
     panel: &Value,
     interp: &Interpolator,
     resolver: &DatasourceResolver,
@@ -195,6 +206,27 @@ fn query_body(
     })
 }
 
+/// Run one panel query, optionally bounded by `timeout`. A `None`
+/// timeout runs unbounded; an elapsed timeout maps to
+/// [`ScrapeError::Network`] so the caller's per-panel error path keeps
+/// the panel as a metadata-only item instead of hanging the sweep.
+async fn run_query(
+    client: &dyn GrafanaClient,
+    body: &Value,
+    timeout: Option<std::time::Duration>,
+) -> Result<Value, ScrapeError> {
+    match timeout {
+        None => client.ds_query(body).await,
+        Some(dur) => match tokio::time::timeout(dur, client.ds_query(body)).await {
+            Ok(res) => res,
+            Err(_) => Err(ScrapeError::Network(format!(
+                "ds/query exceeded {}s timeout",
+                dur.as_secs()
+            ))),
+        },
+    }
+}
+
 /// One `Item::Panel` with stable id `panel-{panelId}`.
 pub(crate) fn panel_item(panel_id: i64, panel: &Value, data: Option<Value>) -> Item {
     let title = panel
@@ -224,7 +256,7 @@ pub(crate) fn panel_item(panel_id: i64, panel: &Value, data: Option<Value>) -> I
 /// Reject the scrape if any surfaced URL's host is outside the
 /// allow-list. An empty list means "operator did not opt in" → allow
 /// all (SCOPE: default no allow-list).
-fn enforce_ssrf(
+pub(crate) fn enforce_ssrf(
     allow_hosts: &[String],
     dash: &Value,
     ds_responses: &[Value],

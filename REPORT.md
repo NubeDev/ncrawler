@@ -1,7 +1,7 @@
 # ncrawler — Grafana Report Builder (design)
 
 Status: **proposal (rev 2 — peer review incorporated)** · grounded against
-the live `rd-esr.nube-iiot.com` instance (Grafana 7.5.17 OSS).
+the live `grafana.example.com` instance (Grafana 7.5.17 OSS).
 
 The goal: turn scraped Grafana artifacts into a human-readable **report**
 about a Grafana instance — an overview, its structure/navigation, and a
@@ -57,9 +57,9 @@ Examples:
 
 ```bash
 # scrape
-ncrawler scrape grafana --url https://rd-esr.nube-iiot.com --all --limit 50
-ncrawler scrape grafana --url https://rd-esr.nube-iiot.com --uid vijaYkWvz,Iw0GqiJSk
-ncrawler scrape grafana --url https://rd-esr.nube-iiot.com --name "Warehouse"
+ncrawler scrape grafana --url https://grafana.example.com --all --limit 50
+ncrawler scrape grafana --url https://grafana.example.com --uid vijaYkWvz,Iw0GqiJSk
+ncrawler scrape grafana --url https://grafana.example.com --name "Warehouse"
 
 # report
 ncrawler build report-grafana --all --mode overview
@@ -113,16 +113,16 @@ separate switch; `--redact/--no-redact` controls secret masking (§7).
 
 ## 4. Report structure (the three sections)
 
-Grounded in real values pulled from `rd-esr` (example shown with
+Grounded in real values pulled from `example` (example shown with
 `--mode full --data --window now-30d`; default window is `now-6h`):
 
 ```markdown
-# Grafana Report — rd-esr.nube-iiot.com
+# Grafana Report — grafana.example.com
 generated 2026-05-29 · mode: full · data: on (now-30d..now) · redacted
 scope: --uid vijaYkWvz  (1 scraped of 1000+ in instance inventory)
 
 ## 1. Overview
-- URL:          https://rd-esr.nube-iiot.com
+- URL:          https://grafana.example.com
 - Version:      7.5.17  (OSS, production)
 - Datasources:  PostgreSQL (postgres, default) · Rubix OS (grafana-rubix-os-data-source)
 - Dashboards:   1000+ inventory / N scraped       Folders: M

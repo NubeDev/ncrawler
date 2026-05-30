@@ -150,7 +150,7 @@ default-on redaction). After this job:
    (b) no `spider_chrome` anywhere; (c) no new `reqwest` major
    versions beyond the `0.12` / `0.13` pair already documented.
 7. End-to-end smoke under `RUN_LIVE_TESTS=1`: `ncrawler scrape
-   grafana --url https://rd-esr.nube-iiot.com --all --limit 5`
+  grafana --url https://grafana.example.com --all --limit 5`
    followed by `ncrawler build report-grafana --all --mode full
    --data --window now-30d`, both succeed and produce a
    `REPORT.md` with (a) the metadata header from REPORT.md \u00a74;
@@ -220,6 +220,6 @@ sanitiser.
   open-questions, closing trio):
   [../ncrawler-v1/](../ncrawler-v1/).
 - Grafana SDK (pinned `=0.1.3` per v1): https://docs.rs/grafana/0.1.3/grafana/.
-- Live instance grounding the design: `rd-esr.nube-iiot.com`
+- Live instance grounding the design: `grafana.example.com`
   (Grafana 7.5.17 OSS, PostgreSQL + grafana-rubix-os-data-source,
   no renderer plugin).

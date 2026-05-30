@@ -12,6 +12,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use ncrawler_spi::{Artifact, Asset, Item, ScrapeError, ScrapeJob};
+use starter_spi::secrets::Secret;
 
 use crate::client::{GrafanaClient, RendererClient};
 
@@ -26,8 +27,17 @@ pub struct VisualOpts {
     pub panels: Vec<i64>,
     /// Dashboard URL used by the Chrome fallback only.
     pub dashboard_url: String,
+    /// Grafana **base** URL (host only — no `/d/...` path). Used by the
+    /// per-panel Chrome path to build `/d-solo/<uid>/...` URLs.
+    pub base_url: String,
     /// `--visual-fallback chrome` opt-in (best-effort, flaky).
     pub fallback_chrome: bool,
+    /// `--visual-whole`: take ONE full-dashboard screenshot instead of
+    /// per-panel PNGs. Only meaningful on the chrome fallback path.
+    pub whole_dashboard: bool,
+    /// Bearer token cloned so the chrome fallback can set
+    /// `Authorization` headers without owning the renderer client.
+    pub token: Option<Secret>,
 }
 
 impl Default for VisualOpts {
@@ -39,7 +49,10 @@ impl Default for VisualOpts {
             to: "now".to_owned(),
             panels: Vec::new(),
             dashboard_url: String::new(),
+            base_url: String::new(),
             fallback_chrome: false,
+            whole_dashboard: false,
+            token: None,
         }
     }
 }
@@ -94,7 +107,21 @@ pub(crate) async fn render_assets(
     match renderer.probe().await {
         Ok(()) => {}
         Err(ScrapeError::RendererPluginMissing) if opts.fallback_chrome => {
-            return crate::chrome::fallback_screenshot(opts, assets_dir).await;
+            // Whole-dashboard screenshot when explicitly requested, or
+            // when no panel items are available; otherwise one PNG per
+            // panel item, linked by `item_id`.
+            if opts.whole_dashboard || items.is_empty() {
+                return crate::chrome::fallback_screenshot(opts, assets_dir).await;
+            }
+            return crate::chrome::fallback_per_panel_screenshots(
+                opts,
+                items,
+                opts.token.as_ref(),
+                &opts.base_url,
+                uid,
+                assets_dir,
+            )
+            .await;
         }
         Err(e) => return Err(e),
     }

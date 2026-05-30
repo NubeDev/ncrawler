@@ -92,6 +92,16 @@ async fn run_scrape(source: &str, out: std::path::PathBuf, rest: &[String]) -> R
     use ncrawler_core::ArtifactStore;
     use ncrawler_spi::{ScrapeJob, Scraper};
 
+    // Staged grafana `data` / `report` operate on an existing artifact
+    // dir (no new timestamped dir, no `Scraper` flow), so intercept them.
+    if source == "grafana" {
+        match flag_value(rest, "--stage").as_deref() {
+            Some("data") => return run_grafana_data_stage(&out, rest).await,
+            Some("report") => return run_grafana_report_stage(&out, rest).await,
+            _ => {}
+        }
+    }
+
     let allow_hosts = flag_values(rest, "--allow-host");
 
     // Grafana API mode fans out the whole DashboardSelector in one
@@ -170,8 +180,20 @@ fn grafana_job(
     if let Some(t) = flag_value(rest, "--to") {
         options.insert("to".into(), t.into());
     }
+    if let Some(secs) = flag_value(rest, "--query-timeout").and_then(|s| s.parse::<u64>().ok()) {
+        options.insert("query_timeout_secs".into(), secs.into());
+    }
     if let Some(vf) = flag_value(rest, "--visual-fallback") {
         options.insert("visual_fallback".into(), vf.into());
+    }
+    if flag_present(rest, "--visual-whole") {
+        options.insert("visual_whole".into(), true.into());
+    }
+    if let Some(stage) = flag_value(rest, "--stage") {
+        options.insert("stage".into(), stage.into());
+    }
+    if flag_present(rest, "--with-shot") {
+        options.insert("with_shot".into(), true.into());
     }
     let panels: Vec<serde_json::Value> = flag_values(rest, "--panel")
         .iter()
@@ -283,6 +305,86 @@ async fn run_grafana_multi(
     Ok(())
 }
 
+/// Locate the artifact directory for a staged grafana sub-run: an
+/// explicit `--artifact <dir>`, else the newest artifact matching `--uid`.
+fn locate_grafana_artifact(
+    out: &std::path::Path,
+    rest: &[String],
+) -> Result<std::path::PathBuf> {
+    if let Some(dir) = flag_value(rest, "--artifact") {
+        return Ok(std::path::PathBuf::from(dir));
+    }
+    let uid = flag_value(rest, "--uid")
+        .context("staged grafana data/report needs --uid or --artifact")?;
+    let store = ArtifactStore::new(out);
+    let entries = store.list(Some("grafana"), None)?;
+    entries
+        .into_iter()
+        .find(|e| e.target == uid)
+        .map(|e| e.dir)
+        .with_context(|| {
+            format!(
+                "no grafana artifact for uid `{uid}` under {}",
+                out.display()
+            )
+        })
+}
+
+/// STAGE 2 (`scrape grafana --stage data`): execute the plan in
+/// `audit.json` against the existing artifact dir, honouring the
+/// selective-run flags. No new artifact directory is created.
+async fn run_grafana_data_stage(out: &std::path::Path, rest: &[String]) -> Result<()> {
+    use ncrawler_grafana::{audit, data, GrafanaCrateClient, Selection};
+
+    let dir = locate_grafana_artifact(out, rest)?;
+    let plan = audit::read(&dir)
+        .map_err(|e| anyhow::anyhow!("read audit.json in {}: {e}", dir.display()))?;
+
+    // Rebuild the client from the base URL recorded in the plan; the
+    // token comes from GRAFANA_TOKEN (the CLI wires no secret store, so
+    // the host-keyed lookup is skipped and the host argument is unused).
+    let token = ncrawler_grafana::resolve_token("", None);
+    let client = GrafanaCrateClient::new(&plan.base_url, token.as_ref())
+        .map_err(|e| anyhow::anyhow!("build grafana client: {e}"))?;
+
+    let selection = Selection {
+        panels: flag_values(rest, "--panel")
+            .iter()
+            .filter_map(|p| p.parse::<i64>().ok())
+            .collect(),
+        only_missing: flag_present(rest, "--only-missing"),
+        only_failed: flag_present(rest, "--only-failed"),
+    };
+    let timeout = flag_value(rest, "--query-timeout")
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|secs| (secs > 0).then(|| std::time::Duration::from_secs(secs)))
+        .unwrap_or_else(|| Some(std::time::Duration::from_secs(30)));
+
+    let status = data::execute(&client, &plan, &dir, &selection, timeout)
+        .await
+        .map_err(|e| anyhow::anyhow!("stage data failed: {e}"))?;
+
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for entry in status.panels.values() {
+        *counts.entry(entry.status.as_str()).or_insert(0) += 1;
+    }
+    let summary: Vec<String> = counts.iter().map(|(k, v)| format!("{v} {k}")).collect();
+    println!(
+        "stage data: {} panels [{}] -> {}",
+        status.panels.len(),
+        summary.join(", "),
+        dir.join("data-status.json").display()
+    );
+    Ok(())
+}
+
+/// STAGE 3 (`scrape grafana --stage report`): build the Markdown report
+/// from the existing artifact dir (alias for `build report-grafana`).
+async fn run_grafana_report_stage(out: &std::path::Path, rest: &[String]) -> Result<()> {
+    let dir = locate_grafana_artifact(out, rest)?;
+    run_build("report-grafana", Some(dir), &[]).await
+}
+
 /// Build a spider [`ScrapeJob`] from the trailing flags.
 fn spider_job(rest: &[String], allow_hosts: Vec<String>) -> Result<ncrawler_spi::ScrapeJob> {
     use ncrawler_spi::ScrapeJob;
@@ -377,6 +479,10 @@ async fn run_build(
     let output = match builder {
         "report-md" => {
             let b = ncrawler_report_md::MarkdownBuilder::new();
+            b.build(&artifact, &ctx, &cancel).await
+        }
+        "report-grafana" => {
+            let b = ncrawler_report_grafana::GrafanaReportBuilder::new();
             b.build(&artifact, &ctx, &cancel).await
         }
         "report-ai" => {
